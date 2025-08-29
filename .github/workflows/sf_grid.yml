@@ -1,0 +1,27 @@
+name: SF Grid Scrape Notebook
+on:
+  schedule:
+    - cron: "15 7 * * *"   
+  workflow_dispatch:        
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pandas playwright nest_asyncio jupyter papermill
+      - run: python -m playwright install --with-deps
+
+      
+      - run: papermill sf_grid_scrape.ipynb executed_sf_grid_scrape.ipynb
+
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sf_quotes_outputs
+          path: sfcompute_grid/
