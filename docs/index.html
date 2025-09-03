@@ -34,7 +34,7 @@
 <div class="wrap">
   <header>
     <h1>SFCompute Pricing (Today)</h1>
-    <div class="muted">Data source: <code>sfcompute_grid/grid_history.csv</code></div>
+    <div class="muted">Data source: <code id="sourcePath">detecting…</code></div>
   </header>
 
   <div class="card">
@@ -73,22 +73,40 @@
 </div>
 
 <script>
-  // ✅ Match your repo: use grid_history.csv (with cache-busting to avoid stale Pages cache)
-  const HISTORY_PATH = 'sfcompute_grid/grid_history.csv?ts=' + Date.now();
+  // --- robust path resolution (tries several common locations in your repo) ---
+  const BASE = (location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/, ''));
+  const CANDIDATES = [
+    'sfcompute_grid/grid_history.csv',
+    'sfcompute_grid/sf_history.csv',
+    'sfcompute_history.csv',
+    'sf_history.csv'
+  ].map(p => new URL(p + '?ts=' + Date.now(), location.origin + BASE).href);
 
   const DURATIONS = ["1 hour","1 day","1 week","1 month"];
   const COUNTS = [8,16,32,64,128,256];
-  let RAW=[], chart;
+  let RAW=[], chart, LOADED_URL=null;
 
-  function csv(url){return new Promise((res,rej)=>Papa.parse(url,{download:true,header:true,dynamicTyping:true,skipEmptyLines:true,complete:r=>res(r.data),error:rej}))}
+  async function fetchCSV(url){
+    const res = await fetch(url, {cache:'no-store'});
+    if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return await res.text();
+  }
+  function parseCSV(text){
+    const out = Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true});
+    if(out.errors && out.errors.length){
+      console.warn('Papa errors:', out.errors.slice(0,3));
+    }
+    return out.data;
+  }
+
   function uniq(a){return Array.from(new Set(a))}
   function fmt(x){return (x==null||Number.isNaN(x))? '—' : `$${Number(x).toFixed(2)}`}
 
   function coerceRow(r){
     r.gpu_count = Number(r.gpu_count);
     r.usd_per_gpu_hr = (r.usd_per_gpu_hr===''||r.usd_per_gpu_hr==null)? null : Number(r.usd_per_gpu_hr);
-    // Older history has no start_label; treat as 'today'
-    if(r.start_label===undefined || r.start_label==='') r.start_label='today';
+    // treat missing start_label as 'today' (older history)
+    r.start_label = r.start_label || 'today';
     return r;
   }
 
@@ -106,14 +124,14 @@
     const duration=document.getElementById('duration').value;
     const countSel=Number(document.getElementById('count').value);
 
-    // today-only
+    // only today rows
     const todayRows = RAW.filter(r=>r.start_label==='today' && r.gpu_type===gpu);
     const latest = latestRowsByKey(todayRows, r=>`${r.gpu_type}|${r.duration}|${r.gpu_count}`);
 
-    // pivot + newest ts
+    // build pivot + newest ts
     let newestTs=''; const pivot=new Map();
     for(const r of latest){ if(String(r.ts_utc)>newestTs) newestTs=String(r.ts_utc); pivot.set(`${r.duration}|${r.gpu_count}`, r.usd_per_gpu_hr); }
-    document.getElementById('kpiDate').textContent=newestTs||'—';
+    document.getElementById('kpiDate').textContent=newestTs || '—';
 
     // table
     const tbl=document.getElementById('latestTable');
@@ -133,7 +151,7 @@
     document.getElementById('kpiMin').textContent=fmt(min);
     document.getElementById('kpiMax').textContent=fmt(max);
 
-    // history series (today-only snapshots over time)
+    // history line (today snapshots over time)
     const series=todayRows.filter(r=>r.duration===duration && r.gpu_count===countSel && r.usd_per_gpu_hr!=null)
                           .sort((a,b)=>String(a.ts_utc).localeCompare(String(b.ts_utc)));
     const labels=series.map(r=>r.ts_utc), y=series.map(r=>r.usd_per_gpu_hr);
@@ -143,30 +161,47 @@
   }
 
   async function main(){
-    try{
-      document.getElementById('lastRefresh').textContent='loading…';
-      RAW=(await csv(HISTORY_PATH)).map(coerceRow);
-      // If file is empty or missing columns, bail gracefully
-      if(!RAW.length){ document.getElementById('lastRefresh').textContent='no data'; return; }
+    const srcEl = document.getElementById('sourcePath');
+    const statusEl = document.getElementById('lastRefresh');
+    statusEl.textContent='loading…';
 
-      const gpus=uniq(RAW.map(r=>r.gpu_type)).sort();
-      const counts=uniq(RAW.map(r=>r.gpu_count)).sort((a,b)=>a-b);
-      document.getElementById('gpu').innerHTML=gpus.map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('duration').innerHTML=DURATIONS.map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('count').innerHTML=counts.map(v=>`<option>${v}</option>`).join('');
-
-      document.getElementById('lastRefresh').textContent='loaded ' + new Date().toISOString().slice(0,19) + 'Z';
-      updateUI();
-      ['gpu','duration','count'].forEach(id=>document.getElementById(id).addEventListener('change', updateUI));
-    }catch(e){
-      console.error(e);
-      document.getElementById('lastRefresh').textContent='failed to load';
+    let lastErr=null;
+    for(const url of CANDIDATES){
+      try{
+        const txt = await fetchCSV(url);
+        RAW = parseCSV(txt).map(coerceRow);
+        LOADED_URL = url;
+        srcEl.textContent = new URL(url).pathname.replace(BASE,'').replace(/^\//,'');
+        break;
+      }catch(e){
+        lastErr = e;
+        console.warn('CSV fetch failed for', url, e);
+      }
     }
+
+    if(!LOADED_URL || !RAW.length){
+      statusEl.textContent = 'failed to load';
+      srcEl.textContent = 'no CSV found (tried ' + CANDIDATES.map(u=>new URL(u).pathname).join(', ') + ')';
+      return;
+    }
+
+    // populate controls
+    const gpus = uniq(RAW.map(r=>r.gpu_type)).sort();
+    const counts = uniq(RAW.map(r=>r.gpu_count)).sort((a,b)=>a-b);
+    document.getElementById('gpu').innerHTML = gpus.map(v=>`<option>${v}</option>`).join('');
+    document.getElementById('duration').innerHTML = DURATIONS.map(v=>`<option>${v}</option>`).join('');
+    document.getElementById('count').innerHTML = counts.map(v=>`<option>${v}</option>`).join('');
+
+    statusEl.textContent='loaded ' + new Date().toISOString().slice(0,19) + 'Z';
+    updateUI();
+    ['gpu','duration','count'].forEach(id=>document.getElementById(id).addEventListener('change', updateUI));
   }
+
   main();
 </script>
 </body>
 </html>
+
 
 
 
