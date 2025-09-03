@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SFCompute Pricing – Today Only</title>
+  <title>SFCompute Pricing</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -15,9 +15,10 @@
     header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
     h1{font-size:20px;margin:0}
     .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.2);margin-bottom:16px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+    label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
     select{background:#0e1117;border:1px solid #2a2f3a;color:var(--text);border-radius:10px;padding:8px 10px}
-    .table-wrap{overflow:auto;border-radius:12px;border:1px solid #2a2f3a}
+    .table-wrap{overflow:auto;border-radius:12px;border:1px solid #2a2f3a;margin-top:12px}
     table{border-collapse:separate;border-spacing:0;width:100%;min-width:560px}
     th,td{padding:8px 10px;border-bottom:1px solid #242a34}
     th{position:sticky;top:0;background:#10131a;color:#cfd3da;font-weight:600}
@@ -26,147 +27,239 @@
     .muted{color:var(--muted)}
     .kpi{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px;margin-top:8px}
     .kpi div{background:#10131a;border:1px solid #222a35;border-radius:12px;padding:10px}
-    .kpi label{display:block;color:#9aa0aa;font-size:12px}
     .kpi strong{font-size:16px}
   </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>SFCompute Pricing (Today)</h1>
-    <div class="muted">Data source: <code>data/sfcompute_history.csv</code></div>
+    <h1>SFCompute Pricing</h1>
+    <div class="muted">Data: <code>docs/data/sfcompute_latest.csv</code> & <code>docs/data/sfcompute_history.csv</code></div>
   </header>
 
+  <!-- LATEST (single most recent snapshot only) -->
   <div class="card">
     <div class="row" style="margin-bottom:8px">
       <div>
-        <label class="muted" for="gpu">GPU</label><br>
+        <label for="gpu">GPU</label>
         <select id="gpu"></select>
       </div>
       <div>
-        <label class="muted" for="duration">Duration</label><br>
+        <label for="duration">Duration</label>
         <select id="duration"></select>
       </div>
       <div>
-        <label class="muted" for="count">GPU Count</label><br>
+        <label for="count">GPU Count</label>
         <select id="count"></select>
       </div>
-      <div style="margin-left:auto"><span class="muted" id="lastRefresh">loading…</span></div>
+      <div style="margin-left:auto">
+        <span class="muted" id="lastRefresh">loading…</span>
+      </div>
     </div>
 
     <div class="kpi">
-      <div><label>Latest snapshot (UTC)</label><strong id="kpiDate">—</strong></div>
-      <div><label>Selected price</label><strong class="mono" id="kpiPrice">—</strong></div>
-      <div><label>Min across counts</label><strong class="mono" id="kpiMin">—</strong></div>
-      <div><label>Max across counts</label><strong class="mono" id="kpiMax">—</strong></div>
+      <div><span class="muted">Latest snapshot (UTC)</span><br><strong id="kpiDate">—</strong></div>
+      <div><span class="muted">Selected price</span><br><strong class="mono" id="kpiPrice">—</strong></div>
+      <div><span class="muted">Min across counts</span><br><strong class="mono" id="kpiMin">—</strong></div>
+      <div><span class="muted">Max across counts</span><br><strong class="mono" id="kpiMax">—</strong></div>
     </div>
 
-    <div class="table-wrap" style="margin-top:12px">
+    <div class="table-wrap">
       <table id="latestTable"></table>
     </div>
   </div>
 
+  <!-- HISTORY (filterable) -->
   <div class="card">
-    <h3 style="margin-top:0">History</h3>
+    <div class="row" style="margin-bottom:8px">
+      <div>
+        <label for="day">Day (history)</label>
+        <select id="day"></select>
+      </div>
+    </div>
     <canvas id="histChart" height="320"></canvas>
   </div>
 </div>
 
 <script>
-  // ✅ Match your /docs/data layout
+  // File locations in your repo
+  const LATEST_PATH  = 'data/sfcompute_latest.csv?ts=' + Date.now();
   const HISTORY_PATH = 'data/sfcompute_history.csv?ts=' + Date.now();
 
-  const DURATIONS = ["1 hour","1 day","1 week","1 month"];
-  const COUNTS = [8,16,32,64,128,256];
-  let RAW=[], chart;
+  const DURATIONS = ["1 hour","1 day","1 week","1 month"];   // expected labels
+  const FALLBACK_COUNTS = [8,16,32,64,128,256];              // table columns order
 
-  function csv(url){return new Promise((res,rej)=>Papa.parse(url,{download:true,header:true,dynamicTyping:true,skipEmptyLines:true,complete:r=>res(r.data),error:rej}))}
-  function uniq(a){return Array.from(new Set(a))}
-  function fmt(x){return (x==null||Number.isNaN(x))? '—' : `$${Number(x).toFixed(2)}`}
+  let LATEST = [], HISTORY = [], chart;
 
-  // Normalize rows from history (supports both old/new schemas)
+  // --- utils ---
+  function csv(url){
+    return new Promise((res, rej) => {
+      Papa.parse(url, {download:true, header:true, dynamicTyping:true, skipEmptyLines:true,
+        complete: r => res(r.data), error: rej});
+    });
+  }
+  const uniq = a => Array.from(new Set(a));
+  const fmt  = x => (x==null || Number.isNaN(x)) ? '—' : `$${Number(x).toFixed(2)}`;
+  const dayOf = ts => (ts||'').slice(0,10);
+
   function coerceRow(r){
+    // normalise keys & types from notebook
+    r.gpu_type = String(r.gpu_type || r.gpu || '').trim();
+    r.duration = String(r.duration || '').trim();
     r.gpu_count = Number(r.gpu_count);
-    r.usd_per_gpu_hr = (r.usd_per_gpu_hr===''||r.usd_per_gpu_hr==null)? null : Number(r.usd_per_gpu_hr);
-    // treat missing start_label as 'today'
-    r.start_label = r.start_label || 'today';
+    // price can be number, "None", "", or "$12.34"
+    if (typeof r.usd_per_gpu_hr === 'string'){
+      const m = r.usd_per_gpu_hr.match(/(\d+(\.\d+)?)/);
+      r.usd_per_gpu_hr = m ? Number(m[1]) : null;
+    }
+    if (r.usd_per_gpu_hr === '' || r.usd_per_gpu_hr === 'None') r.usd_per_gpu_hr = null;
+    r.ts_utc = String(r.ts_utc || r.timestamp || '');
     return r;
   }
 
-  function latestRowsByKey(rows,keyFn){
-    const m=new Map();
+  function buildPivot(rows){
+    // map: key = `${duration}|${count}` -> price
+    const m = new Map();
+    let newest = '';
     for(const r of rows){
-      const k=keyFn(r), p=m.get(k);
-      if(!p || String(r.ts_utc)>String(p.ts_utc)) m.set(k,r);
+      const k = `${r.duration}|${r.gpu_count}`;
+      m.set(k, r.usd_per_gpu_hr);
+      if (String(r.ts_utc) > newest) newest = String(r.ts_utc);
     }
-    return [...m.values()];
+    return {pivot:m, newest};
   }
 
-  function updateUI(){
-    const gpu=document.getElementById('gpu').value;
-    const duration=document.getElementById('duration').value;
-    const countSel=Number(document.getElementById('count').value);
+  function renderLatest(gpuSel, durationSel, countSel){
+    const rows = LATEST.filter(r => r.gpu_type === gpuSel);
+    const counts = rows.length ? uniq(rows.map(r => r.gpu_count)).sort((a,b)=>a-b) : FALLBACK_COUNTS.slice();
+    const {pivot, newest} = buildPivot(rows);
 
-    // today-only
-    const todayRows = RAW.filter(r=>r.start_label==='today' && r.gpu_type===gpu);
-    const latest = latestRowsByKey(todayRows, r=>`${r.gpu_type}|${r.duration}|${r.gpu_count}`);
-
-    // pivot + newest ts
-    let newestTs=''; const pivot=new Map();
-    for(const r of latest){ if(String(r.ts_utc)>newestTs) newestTs=String(r.ts_utc); pivot.set(`${r.duration}|${r.gpu_count}`, r.usd_per_gpu_hr); }
-    document.getElementById('kpiDate').textContent=newestTs||'—';
-
-    // table
-    const tbl=document.getElementById('latestTable');
-    let html='<thead><tr><th>Duration</th>'+COUNTS.map(c=>`<th class="mono">${c}</th>`).join('')+'</tr></thead><tbody>';
-    for(const d of DURATIONS){
-      html+=`<tr><td>${d}</td>`;
-      for(const c of COUNTS){ html+=`<td class="mono">${fmt(pivot.get(`${d}|${c}`))}</td>`; }
-      html+='</tr>';
+    // header counts dropdown should reflect data
+    document.getElementById('count').innerHTML = counts.map(v=>`<option>${v}</option>`).join('');
+    if (!counts.includes(Number(countSel))){
+      countSel = counts[0];
+      document.getElementById('count').value = countSel;
     }
-    html+='</tbody>'; tbl.innerHTML=html;
+
+    // table render
+    const tbl = document.getElementById('latestTable');
+    let html = '<thead><tr><th>Duration</th>' + counts.map(c=>`<th class="mono">${c}</th>`).join('') + '</tr></thead><tbody>';
+    for (const d of DURATIONS){
+      html += `<tr><td>${d}</td>`;
+      for (const c of counts){
+        html += `<td class="mono">${fmt(pivot.get(`${d}|${c}`))}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody>';
+    tbl.innerHTML = html;
 
     // KPIs
-    const val=pivot.get(`${duration}|${countSel}`);
-    document.getElementById('kpiPrice').textContent=fmt(val);
-    const vals=COUNTS.map(c=>pivot.get(`${duration}|${c}`)).filter(v=>v!=null);
-    const min=vals.length?Math.min(...vals):null, max=vals.length?Math.max(...vals):null;
-    document.getElementById('kpiMin').textContent=fmt(min);
-    document.getElementById('kpiMax').textContent=fmt(max);
+    const selVal = pivot.get(`${durationSel}|${Number(countSel)}`);
+    const rowVals = counts.map(c => pivot.get(`${durationSel}|${c}`)).filter(v => v != null);
+    const kMin = rowVals.length ? Math.min(...rowVals) : null;
+    const kMax = rowVals.length ? Math.max(...rowVals) : null;
+    document.getElementById('kpiDate').textContent  = newest || '—';
+    document.getElementById('kpiPrice').textContent = fmt(selVal);
+    document.getElementById('kpiMin').textContent   = fmt(kMin);
+    document.getElementById('kpiMax').textContent   = fmt(kMax);
+  }
 
-    // history (today snapshots over time)
-    const series=todayRows.filter(r=>r.duration===duration && r.gpu_count===countSel && r.usd_per_gpu_hr!=null)
-                          .sort((a,b)=>String(a.ts_utc).localeCompare(String(b.ts_utc)));
-    const labels=series.map(r=>r.ts_utc), y=series.map(r=>r.usd_per_gpu_hr);
-    const ctx=document.getElementById('histChart').getContext('2d'); if(chart) chart.destroy();
-    chart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${gpu} · ${duration} · ${countSel} GPUs`,data:y,tension:.2}]},
-      options:{responsive:true,maintainAspectRatio:false,scales:{x:{ticks:{maxRotation:0,autoSkip:true}},y:{beginAtZero:false}}}});
+  function renderHistory(gpuSel, durationSel, countSel){
+    // filter across ALL days; day dropdown can further narrow
+    const rows = HISTORY.filter(r =>
+      r.gpu_type === gpuSel && r.duration === durationSel && r.gpu_count === Number(countSel) && r.usd_per_gpu_hr != null
+    ).sort((a,b)=> String(a.ts_utc).localeCompare(String(b.ts_utc)));
+
+    // build day selector
+    const days = ['All days', ...uniq(rows.map(r => dayOf(r.ts_utc)))];
+    const daySel = document.getElementById('day');
+    if (!daySel.options.length){
+      daySel.innerHTML = days.map(d=>`<option>${d}</option>`).join('');
+    } else {
+      // keep current value if still present
+      const cur = daySel.value;
+      daySel.innerHTML = days.map(d=>`<option ${d===cur?'selected':''}>${d}</option>`).join('');
+    }
+
+    let filtered = rows;
+    if (daySel.value && daySel.value !== 'All days'){
+      filtered = rows.filter(r => dayOf(r.ts_utc) === daySel.value);
+    }
+
+    const labels = filtered.map(r => r.ts_utc);
+    const y = filtered.map(r => r.usd_per_gpu_hr);
+
+    const ctx = document.getElementById('histChart').getContext('2d');
+    if (chart) chart.destroy();
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ label: `${gpuSel} · ${durationSel} · ${countSel} GPUs`, data: y, tension: .2 }] },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:false } }
+      }
+    });
+
+    // re-render on day change
+    daySel.onchange = () => renderHistory(gpuSel, durationSel, countSel);
+  }
+
+  function updateAll(){
+    const gpuSel = document.getElementById('gpu').value;
+    const durSel = document.getElementById('duration').value;
+    const cntSel = document.getElementById('count').value;
+    renderLatest(gpuSel, durSel, cntSel);
+    renderHistory(gpuSel, durSel, cntSel);
   }
 
   async function main(){
     try{
-      document.getElementById('lastRefresh').textContent='loading…';
-      RAW=(await csv(HISTORY_PATH)).map(coerceRow);
-      if(!RAW.length){ document.getElementById('lastRefresh').textContent='no data'; return; }
+      document.getElementById('lastRefresh').textContent = 'loading…';
 
-      const gpus=uniq(RAW.map(r=>r.gpu_type)).sort();
-      const counts=uniq(RAW.map(r=>r.gpu_count)).sort((a,b)=>a-b);
-      document.getElementById('gpu').innerHTML=gpus.map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('duration').innerHTML=["1 hour","1 day","1 week","1 month"].map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('count').innerHTML=counts.map(v=>`<option>${v}</option>`).join('');
+      // load data
+      const [latestRows, histRows] = await Promise.all([csv(LATEST_PATH), csv(HISTORY_PATH)]);
+      LATEST  = latestRows.map(coerceRow);
+      HISTORY = histRows.map(coerceRow);
 
-      document.getElementById('lastRefresh').textContent='loaded ' + new Date().toISOString().slice(0,19) + 'Z';
-      updateUI();
-      ['gpu','duration','count'].forEach(id=>document.getElementById(id).addEventListener('change', updateUI));
+      // if latest is missing, synthesise latest from history (max ts per duration|count|gpu)
+      if (!LATEST.length && HISTORY.length){
+        const byKey = new Map();
+        for (const r of HISTORY){
+          const k = `${r.gpu_type}|${r.duration}|${r.gpu_count}`;
+          const prev = byKey.get(k);
+          if (!prev || String(r.ts_utc) > String(prev.ts_utc)) byKey.set(k, r);
+        }
+        LATEST = [...byKey.values()];
+      }
+
+      if (!LATEST.length){
+        document.getElementById('lastRefresh').textContent = 'no data';
+        return;
+      }
+
+      // populate selectors
+      const gpus = uniq(LATEST.map(r=>r.gpu_type)).sort();
+      const counts = uniq(LATEST.map(r=>r.gpu_count)).sort((a,b)=>a-b);
+      document.getElementById('gpu').innerHTML = gpus.map(v=>`<option>${v}</option>`).join('');
+      document.getElementById('duration').innerHTML = DURATIONS.map(v=>`<option>${v}</option>`).join('');
+      document.getElementById('count').innerHTML = counts.map(v=>`<option>${v}</option>`).join('');
+
+      document.getElementById('lastRefresh').textContent = 'loaded ' + new Date().toISOString().slice(0,19) + 'Z';
+
+      updateAll();
+      ['gpu','duration','count'].forEach(id => document.getElementById(id).addEventListener('change', updateAll));
     }catch(e){
       console.error(e);
-      document.getElementById('lastRefresh').textContent='failed to load';
+      document.getElementById('lastRefresh').textContent = 'failed to load';
     }
   }
+
   main();
 </script>
 </body>
 </html>
+
 
 
 
