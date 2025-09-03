@@ -1,15 +1,15 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>SFCompute Pricing Dashboard</title>
 
-  <!-- Fonts & minimal dark UI -->
+  <!-- Minimal dark theme -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
-    :root { --bg:#0b1215; --fg:#e6eef2; --muted:#9fb2bd; --card:#111a1f; --border:#1e2a30; --accent:#8ee3ff; }
+    :root{--bg:#0b1215;--fg:#e6eef2;--muted:#9fb2bd;--card:#111a1f;--border:#1e2a30}
     *{box-sizing:border-box}
     html,body{height:100%}
     body{margin:0;font-family:Inter,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}
@@ -19,21 +19,19 @@
     main{padding:18px 22px;max-width:1200px;margin:0 auto}
     .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
     .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px}
-    .span12{grid-column:span 12}
-    .span8{grid-column:span 8}
-    .span4{grid-column:span 4}
+    .span12{grid-column:span 12}.span8{grid-column:span 8}.span4{grid-column:span 4}
     .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    select,input[type=checkbox],label,button{font:inherit}
     select,button{background:#0f1920;color:var(--fg);border:1px solid #22313a;border-radius:10px;padding:8px 10px}
     button{cursor:pointer}
     .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
     .kpi .box{background:#0f1920;border:1px solid #1f2a31;border-radius:12px;padding:12px}
-    .kpi .label{font-size:12px;color:var(--muted)}
-    .kpi .value{font-size:22px;font-weight:800}
+    .kpi .label{font-size:12px;color:var(--muted)} .kpi .value{font-size:22px;font-weight:800}
     table{width:100%;border-collapse:collapse}
     th,td{border-bottom:1px solid #1f2a31;padding:8px 6px;text-align:left;font-size:13px;white-space:nowrap}
     th{color:var(--muted);font-weight:600;cursor:pointer}
-    a{color:var(--accent);text-decoration:none}
     #stamp{font-size:12px;margin-left:8px}
+    .chip{display:inline-block;padding:2px 8px;border:1px solid #2a3a44;border-radius:999px;font-size:12px;margin-left:6px}
   </style>
 
   <!-- libs -->
@@ -51,13 +49,16 @@
         <div class="controls">
           <label>GPU&nbsp;<select id="gpuSelect"></select></label>
           <label>Duration&nbsp;<select id="durSelect"></select></label>
+          <label class="muted" style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="allDurations"/> Compare all durations
+          </label>
           <button id="refreshBtn">Refresh</button>
           <span class="muted">Source: <code>data/sfcompute_latest.csv</code> & <code>data/sfcompute_history.csv</code></span>
         </div>
       </div>
 
       <div class="card span8">
-        <div id="priceChart" style="height:420px"></div>
+        <div id="priceChart" style="height:430px"></div>
       </div>
       <div class="card span4">
         <div class="kpi">
@@ -66,8 +67,10 @@
           <div class="box"><div class="label">Max (history)</div><div id="kpiMax" class="value">–</div></div>
         </div>
         <p class="muted" style="margin-top:12px">
-          Forward curve: x-axis is <b>future start time</b>, y-axis is quoted <b>$ per GPU hour</b> for the selected GPU and duration.
+          The chart shows <b>future start time</b> (or scrape time if not provided) on the x-axis
+          and quoted <b>$ per GPU hour</b> on the y-axis.
         </p>
+        <div id="meta" class="muted"></div>
       </div>
 
       <div class="card span12">
@@ -93,68 +96,48 @@ function csv(url){
     });
   });
 }
-
-function unique(arr, key){
-  return [...new Set(arr.map(d=>d[key]).filter(v=>v!==undefined && v!==''))];
-}
-
+function unique(arr, key){ return [...new Set(arr.map(d=>d[key]).filter(v=>v!==undefined && v!==''))]; }
 function hoursToLabel(h){
   h = Number(h);
   if (!isFinite(h)) return String(h);
-  if (h % 720 === 0) return (h/720) + ' month' + (h/720>1?'s':'');  // ~30d
-  if (h % 168 === 0) return (h/168) + ' week'  + (h/168>1?'s':'');
-  if (h % 24  === 0) return (h/24)  + ' day'   + (h/24>1?'s':'');
-  return h + ' hour' + (h>1?'s':'');
+  if (h % 720 === 0) return (h/720)+' month'+(h/720>1?'s':'');
+  if (h % 168 === 0) return (h/168)+' week'+(h/168>1?'s':'');
+  if (h % 24  === 0) return (h/24)+' day'+(h/24>1?'s':'');
+  return h+' hour'+(h>1?'s':'');
 }
-
 function parseDurationToHours(v){
   if (v == null || v === '') return undefined;
-  if (!isNaN(Number(v))) return Number(v); // already hours
+  if (!isNaN(Number(v))) return Number(v);
   const m = String(v).trim().match(/(\d+(?:\.\d+)?)\s*(hour|hr|day|week|month)s?/i);
   if (!m) return undefined;
   const n = parseFloat(m[1]); const u = m[2].toLowerCase();
   if (u.startsWith('hour') || u.startsWith('hr')) return n;
-  if (u.startsWith('day')) return n*24;
+  if (u.startsWith('day'))  return n*24;
   if (u.startsWith('week')) return n*168;
-  if (u.startsWith('month')) return n*720; // ~30d
-  return undefined;
+  if (u.startsWith('month'))return n*720;
 }
-
 function fmtDate(d){
   try{
-    return new Intl.DateTimeFormat(undefined, {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(d);
-  }catch(e){ return String(d); }
+    return new Intl.DateTimeFormat(undefined,{year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(d);
+  }catch{ return String(d); }
 }
-
-// Normalise column names and types across files
 function normalise(df){
   df.forEach(r=>{
-    // GPU name
     r.gpu_model = r.gpu_model || r.gpu_type || r.gpu || r.gpuModel;
-
-    // price
     r.price_hourly_usd = r.price_hourly_usd ?? r.usd_per_gpu_hr ?? r.price ?? r.hourly ?? r.pricePerHour;
-
-    // duration
     r.duration_hours = r.duration_hours ?? parseDurationToHours(r.duration) ?? parseDurationToHours(r.duration_label);
-
-    // timestamps: prefer explicit start time; else ts_utc; else captured_at
-    r.start_time_iso = r.start_time_iso || r.start_time || r.ts_utc || r.start || r.start_at;
+    // prefer real forward start time if present; else ts_utc; else captured_at
+    r.start_time_iso = r.start_time_iso || r.start_time || r.ts_utc || r.start || r.start_at || r.captured_at_iso;
     if (typeof r.start_time_iso === 'string' && r.start_time_iso.trim() !== ''){
-      const d = new Date(r.start_time_iso);
-      if (!isNaN(d)) r.start_time_iso = d;
+      const d = new Date(r.start_time_iso); if (!isNaN(d)) r.start_time_iso = d;
     }
-
-    // optional fields
+    r.captured_at_iso = r.captured_at_iso || r.ts_utc || r.captured_at || r.updated_at || r.start_time_iso;
+    if (typeof r.captured_at_iso === 'string' && r.captured_at_iso.trim() !== ''){
+      const c = new Date(r.captured_at_iso); if (!isNaN(c)) r.captured_at_iso = c;
+    }
     r.gpu_count = r.gpu_count ?? r.count ?? r.quantity;
     r.quote_source = r.quote_source || r.source || '';
-    r.captured_at_iso = r.captured_at_iso || r.ts_utc || r.captured_at || r.updated_at;
-    if (typeof r.captured_at_iso === 'string' && r.captured_at_iso.trim() !== ''){
-      const c = new Date(r.captured_at_iso);
-      if (!isNaN(c)) r.captured_at_iso = c;
-    }
   });
-  // keep only rows with key fields
   return df.filter(r => r.gpu_model && r.price_hourly_usd!=null && r.duration_hours && r.start_time_iso instanceof Date && !isNaN(r.start_time_iso));
 }
 
@@ -167,11 +150,15 @@ async function load(){
   buildFilters();
   render();
 
-  // last updated stamp from latest file
+  // last updated stamp from captured_at/start_time
   const latestTime = state.latest.map(r=>r.captured_at_iso instanceof Date ? r.captured_at_iso : r.start_time_iso)
-                                 .filter(Boolean)
-                                 .sort((a,b)=>a-b).pop();
+                                 .filter(Boolean).sort((a,b)=>a-b).pop();
   document.getElementById('stamp').textContent = latestTime ? `· last updated ${fmtDate(latestTime)}` : '';
+
+  // meta chips
+  const meta = document.getElementById('meta');
+  const durs = unique(state.history,'duration_hours').map(Number).sort((a,b)=>a-b).map(h=>`<span class="chip">${hoursToLabel(h)}</span>`).join('');
+  meta.innerHTML = `Durations detected: ${durs || '<span class="chip">none</span>'}`;
 }
 
 function buildFilters(){
@@ -182,14 +169,13 @@ function buildFilters(){
   unique(state.history,'gpu_model').sort((a,b)=>String(a).localeCompare(String(b))).forEach(v=>{
     const o = document.createElement('option'); o.value=o.textContent=v; gpuSel.appendChild(o);
   });
-
-  // get all distinct duration hours across history, sorted ascending numeric
   unique(state.history,'duration_hours').map(Number).filter(Number.isFinite).sort((a,b)=>a-b).forEach(h=>{
     const o = document.createElement('option'); o.value=String(h); o.textContent=hoursToLabel(h); durSel.appendChild(o);
   });
 
   gpuSel.addEventListener('change', render);
   durSel.addEventListener('change', render);
+  document.getElementById('allDurations').addEventListener('change', render);
   document.getElementById('refreshBtn').addEventListener('click', ()=>load());
 }
 
@@ -197,28 +183,33 @@ function buildFilters(){
 function render(){
   const gpu = document.getElementById('gpuSelect').value;
   const dur = Number(document.getElementById('durSelect').value);
+  const compareAll = document.getElementById('allDurations').checked;
 
-  const latest = state.latest
-    .filter(d=>String(d.gpu_model)===String(gpu) && Number(d.duration_hours)===dur)
-    .sort((a,b)=>a.start_time_iso - b.start_time_iso);
+  // Build traces
+  let traces = [];
+  const latestSet = state.latest.filter(d=>String(d.gpu_model)===String(gpu));
+  if (compareAll){
+    const durs = unique(latestSet,'duration_hours').map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+    for (const dh of durs){
+      const rows = latestSet.filter(d=>Number(d.duration_hours)===dh).sort((a,b)=>a.start_time_iso - b.start_time_iso);
+      if (!rows.length) continue;
+      traces.push({
+        x: rows.map(d=>d.start_time_iso),
+        y: rows.map(d=>Number(d.price_hourly_usd)),
+        type:'scatter', mode:'lines+markers',
+        name:`${hoursToLabel(dh)}`
+      });
+    }
+  } else {
+    const rows = latestSet.filter(d=>Number(d.duration_hours)===dur).sort((a,b)=>a.start_time_iso - b.start_time_iso);
+    traces.push({
+      x: rows.map(d=>d.start_time_iso),
+      y: rows.map(d=>Number(d.price_hourly_usd)),
+      type:'scatter', mode:'lines+markers',
+      name:`${hoursToLabel(dur)}`
+    });
+  }
 
-  const hist = state.history
-    .filter(d=>String(d.gpu_model)===String(gpu) && Number(d.duration_hours)===dur);
-
-  // KPIs
-  const prices = hist.map(d=>Number(d.price_hourly_usd)).filter(Number.isFinite);
-  const latestPrice = latest.length ? Number(latest[latest.length-1].price_hourly_usd) : null;
-  document.getElementById('kpiLatest').textContent = latestPrice!=null ? `$${latestPrice.toFixed(2)}` : '–';
-  document.getElementById('kpiMin').textContent    = prices.length ? `$${Math.min(...prices).toFixed(2)}` : '–';
-  document.getElementById('kpiMax').textContent    = prices.length ? `$${Math.max(...prices).toFixed(2)}` : '–';
-
-  // Chart (forward curve from latest file)
-  const trace = {
-    x: latest.map(d=>d.start_time_iso),
-    y: latest.map(d=>Number(d.price_hourly_usd)),
-    type:'scatter', mode:'lines+markers',
-    name:`${gpu} · ${hoursToLabel(dur)}`
-  };
   const layout = {
     margin:{l:60,r:20,t:10,b:50},
     paper_bgcolor:'transparent', plot_bgcolor:'transparent',
@@ -226,13 +217,25 @@ function render(){
     yaxis:{title:'$/GPU/hour', gridcolor:'#22313a'},
     font:{color:'#e6eef2'}
   };
-  Plotly.newPlot('priceChart',[trace],layout,{displayModeBar:false, responsive:true});
+  Plotly.newPlot('priceChart', traces, layout, {displayModeBar:false, responsive:true});
+
+  // KPIs (history-based for the selected GPU)
+  const hset = state.history.filter(d=>String(d.gpu_model)===String(gpu));
+  const prices = hset.map(d=>Number(d.price_hourly_usd)).filter(Number.isFinite);
+  const latestForSel = state.latest.filter(d=>String(d.gpu_model)===String(gpu) && (compareAll || Number(d.duration_hours)===dur))
+                                  .sort((a,b)=>a.start_time_iso - b.start_time_iso);
+  const latestPrice = latestForSel.length ? Number(latestForSel[latestForSel.length-1].price_hourly_usd) : null;
+  document.getElementById('kpiLatest').textContent = latestPrice!=null ? `$${latestPrice.toFixed(2)}` : '–';
+  document.getElementById('kpiMin').textContent    = prices.length ? `$${Math.min(...prices).toFixed(2)}` : '–';
+  document.getElementById('kpiMax').textContent    = prices.length ? `$${Math.max(...prices).toFixed(2)}` : '–';
 
   // Table (latest snapshot for selection)
-  buildTable(latest);
+  const tableRows = compareAll
+    ? state.latest.filter(d=>String(d.gpu_model)===String(gpu))
+    : state.latest.filter(d=>String(d.gpu_model)===String(gpu) && Number(d.duration_hours)===dur);
+  buildTable(tableRows);
 }
 
-// simple sortable table
 function buildTable(rows){
   const table = document.getElementById('latestTable');
   table.innerHTML = '';
@@ -259,8 +262,8 @@ function buildTable(rows){
   });
 
   for (const r of sorted){
-    const tr = document.createElement('tr');
     const startTxt = r.start_time_iso instanceof Date ? fmtDate(r.start_time_iso) : (r.start_time_iso||'');
+    const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${r.gpu_model ?? ''}</td>
       <td>${startTxt}</td>
@@ -287,4 +290,5 @@ load();
 </script>
 </body>
 </html>
+
 
