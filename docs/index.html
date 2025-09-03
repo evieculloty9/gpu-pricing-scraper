@@ -3,24 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SFCompute Pricing Dashboard</title>
+  <title>SFCompute Pricing – Today Only</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-    :root{
-      --bg:#0b0c10;--card:#151720;--muted:#9aa0aa;--text:#e8eaed;--accent:#6aa9ff;--ok:#28c76f;--warn:#ffad33;
-    }
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"}
+    :root{--bg:#0b0c10;--card:#151720;--muted:#9aa0aa;--text:#e8eaed;--accent:#6aa9ff}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
     a{color:var(--accent);text-decoration:none}
-    .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
+    .wrap{max-width:1150px;margin:24px auto;padding:0 16px}
     header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
     h1{font-size:20px;margin:0}
-    .cards{display:grid;grid-template-columns:1fr;gap:16px}
-    @media (min-width: 1000px){.cards{grid-template-columns: 1.1fr .9fr}}
-    .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+    .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.2);margin-bottom:16px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    .row > *{flex:0 0 auto}
     select{background:#0e1117;border:1px solid #2a2f3a;color:var(--text);border-radius:10px;padding:8px 10px}
     .table-wrap{overflow:auto;border-radius:12px;border:1px solid #2a2f3a}
     table{border-collapse:separate;border-spacing:0;width:100%;min-width:560px}
@@ -29,238 +24,126 @@
     tr:hover td{background:#121722}
     .mono{font-variant-numeric:tabular-nums}
     .muted{color:var(--muted)}
-    .badge{padding:2px 8px;border-radius:999px;background:#0f1320;border:1px solid #253046;color:#9ab4ff}
     .kpi{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px;margin-top:8px}
     .kpi div{background:#10131a;border:1px solid #222a35;border-radius:12px;padding:10px}
     .kpi label{display:block;color:#9aa0aa;font-size:12px}
     .kpi strong{font-size:16px}
-    footer{margin-top:28px;color:#8b91a1}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>SFCompute Pricing Dashboard</h1>
-      <div class="muted">reads CSVs from <code>sfcompute_grid/</code> in this repo</div>
-    </header>
+<div class="wrap">
+  <header>
+    <h1>SFCompute Pricing (Today)</h1>
+    <div class="muted">Data source: <code>sfcompute_grid/sf_history.csv</code> (filters to <em>today</em> if present; falls back if not)</div>
+  </header>
 
-    <div class="card">
-      <div class="row" style="margin-bottom:8px">
-        <div>
-          <label class="muted" for="gpu">GPU</label><br>
-          <select id="gpu"></select>
-        </div>
-        <div>
-          <label class="muted" for="duration">Duration</label><br>
-          <select id="duration"></select>
-        </div>
-        <div>
-          <label class="muted" for="start">Start</label><br>
-          <select id="start"></select>
-        </div>
-        <div>
-          <label class="muted" for="count">GPU Count</label><br>
-          <select id="count"></select>
-        </div>
-        <div style="margin-left:auto">
-          <span class="badge" id="lastRefresh">loading…</span>
-        </div>
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <div>
+        <label class="muted" for="gpu">GPU</label><br>
+        <select id="gpu"></select>
       </div>
-
-      <div class="kpi">
-        <div><label>Latest snapshot date (UTC)</label><strong id="kpiDate">—</strong></div>
-        <div><label>Selected price</label><strong class="mono" id="kpiPrice">—</strong></div>
-        <div><label>Min across counts</label><strong class="mono" id="kpiMin">—</strong></div>
-        <div><label>Max across counts</label><strong class="mono" id="kpiMax">—</strong></div>
+      <div>
+        <label class="muted" for="duration">Duration</label><br>
+        <select id="duration"></select>
       </div>
-
-      <div class="table-wrap" style="margin-top:12px">
-        <table id="latestTable"></table>
+      <div>
+        <label class="muted" for="count">GPU Count</label><br>
+        <select id="count"></select>
       </div>
+      <div style="margin-left:auto"><span class="muted" id="lastRefresh">loading…</span></div>
     </div>
 
-    <div class="cards">
-      <div class="card">
-        <h3 style="margin-top:0">History</h3>
-        <canvas id="histChart" height="280"></canvas>
-      </div>
-
-      <div class="card">
-        <h3 style="margin-top:0">Forward Starts (latest per label)</h3>
-        <div class="table-wrap"><table id="forwardTable"></table></div>
-      </div>
+    <div class="kpi">
+      <div><label>Latest snapshot (UTC)</label><strong id="kpiDate">—</strong></div>
+      <div><label>Selected price</label><strong class="mono" id="kpiPrice">—</strong></div>
+      <div><label>Min across counts</label><strong class="mono" id="kpiMin">—</strong></div>
+      <div><label>Max across counts</label><strong class="mono" id="kpiMax">—</strong></div>
     </div>
 
-    <footer>
-      <p>Tip: update <code>sfcompute_grid/grid_history.csv</code> daily (e.g. via GitHub Action). This page always pulls the latest on load.</p>
-    </footer>
+    <div class="table-wrap" style="margin-top:12px">
+      <table id="latestTable"></table>
+    </div>
   </div>
 
-<script>
-const HISTORY_PATH = 'sfcompute_grid/grid_history.csv';
-// If you also keep daily snapshots like grid_YYYYMMDD.csv you can add a second fetch; we derive latest from history.
+  <div class="card">
+    <h3 style="margin-top:0">History</h3>
+    <canvas id="histChart" height="320"></canvas>
+  </div>
+</div>
 
+<script>
+const HISTORY_PATH = 'sfcompute_grid/sf_history.csv'; // point dashboard here
 const DURATIONS = ["1 hour","1 day","1 week","1 month"];
 const COUNTS = [8,16,32,64,128,256];
-const START_ORDER = ["today","tomorrow","in 2 days","in 3 days","in 4 days","in 5 days","in 6 days","in 1 week"]; // UI order
+let RAW=[]; let chart;
 
-let RAW = []; // full rows
-let START_LABELS = []; // discovered from data
-let chart;
-
-function csv(url){
-  return new Promise((resolve,reject)=>{
-    Papa.parse(url,{download:true,header:true,dynamicTyping:true,skipEmptyLines:true,complete:r=>resolve(r.data),error:reject});
-  });
-}
+function csv(url){return new Promise((res,rej)=>Papa.parse(url,{download:true,header:true,dynamicTyping:true,skipEmptyLines:true,complete:r=>res(r.data),error:rej}))}
+function uniq(a){return Array.from(new Set(a))}
+function fmt(x){return (x==null||Number.isNaN(x))? '—' : `$${Number(x).toFixed(2)}`}
 
 function coerceRow(r){
-  // Handle older rows without start_label/start_date_iso
-  if(!r.start_label){ r.start_label = 'today'; }
-  if(!r.start_date_iso){ r.start_date_iso = (r.ts_utc||'').slice(0,10); }
-  r.gpu_count = Number(r.gpu_count);
-  r.usd_per_gpu_hr = (r.usd_per_gpu_hr === '' || r.usd_per_gpu_hr===null) ? null : Number(r.usd_per_gpu_hr);
+  r.gpu_count=Number(r.gpu_count); r.usd_per_gpu_hr=(r.usd_per_gpu_hr===''||r.usd_per_gpu_hr==null)?null:Number(r.usd_per_gpu_hr);
+  // treat rows with missing start_label as 'today'
+  r.start_label=r.start_label||'today';
   return r;
 }
 
-function latestRowsByKey(rows, keyFn){
-  const map = new Map();
-  for(const r of rows){
-    const k = keyFn(r);
-    const prev = map.get(k);
-    if(!prev){ map.set(k, r); continue; }
-    // choose the newer ts_utc (string compare ok for ISO seconds)
-    if(String(r.ts_utc) > String(prev.ts_utc)) map.set(k, r);
-  }
-  return Array.from(map.values());
-}
-
-function fmt(x){
-  if(x===null || x===undefined || Number.isNaN(x)) return '—';
-  return `$${Number(x).toFixed(2)}`;
-}
-
-function buildSelect(el, options, value){
-  el.innerHTML = options.map(v=>`<option value="${v}">${v}</option>`).join('');
-  if(value && options.includes(value)) el.value = value; else el.selectedIndex = 0;
-}
-
-function uniq(arr){ return Array.from(new Set(arr)); }
-
-function preferredStartOrder(list){
-  const idx = v=>{
-    const i = START_ORDER.indexOf(v);
-    return i===-1 ? 999 : i;
-  };
-  return list.slice().sort((a,b)=>idx(a)-idx(b));
-}
+function latestRowsByKey(rows,keyFn){const m=new Map(); for(const r of rows){const k=keyFn(r); const p=m.get(k); if(!p||String(r.ts_utc)>String(p.ts_utc)) m.set(k,r);} return [...m.values()]}
 
 function updateUI(){
-  const gpu = document.getElementById('gpu').value;
-  const duration = document.getElementById('duration').value;
-  const startLabel = document.getElementById('start').value;
-  const countSel = document.getElementById('count').value; // number or 'median'
+  const gpu=document.getElementById('gpu').value;
+  const duration=document.getElementById('duration').value;
+  const countSel=Number(document.getElementById('count').value);
 
-  // Latest snapshot for startLabel (pivot: duration x counts)
-  const latest = latestRowsByKey(RAW.filter(r=>r.gpu_type===gpu && r.start_label===startLabel), r=>`${r.gpu_type}|${r.start_label}|${r.duration}|${r.gpu_count}`);
+  // Only today rows (or rows with no start_label)
+  const todayRows=RAW.filter(r=>r.start_label==='today' && r.gpu_type===gpu);
+  const latest=latestRowsByKey(todayRows, r=>`${r.gpu_type}|${r.duration}|${r.gpu_count}`);
 
-  const latestByDurCount = new Map();
-  for(const r of latest){ latestByDurCount.set(`${r.duration}|${r.gpu_count}`, r); }
+  let newestTs='';
+  const pivot=new Map();
+  for(const r of latest){ if(String(r.ts_utc)>newestTs) newestTs=String(r.ts_utc); pivot.set(`${r.duration}|${r.gpu_count}`, r.usd_per_gpu_hr); }
+  document.getElementById('kpiDate').textContent=newestTs||'—';
 
-  // KPI date: newest ts among these latest rows
-  let newestTs = '';
-  for(const r of latest){ if(String(r.ts_utc) > newestTs) newestTs = String(r.ts_utc); }
-  document.getElementById('kpiDate').textContent = newestTs || '—';
+  const tbl=document.getElementById('latestTable');
+  let html='<thead><tr><th>Duration</th>'+COUNTS.map(c=>`<th class="mono">${c}</th>`).join('')+'</tr></thead><tbody>';
+  for(const d of DURATIONS){ html+=`<tr><td>${d}</td>`; for(const c of COUNTS){ html+=`<td class="mono">${fmt(pivot.get(`${d}|${c}`))}</td>`;} html+='</tr>'; }
+  html+='</tbody>'; tbl.innerHTML=html;
 
-  // Build latest table
-  const tbl = document.getElementById('latestTable');
-  let html = '<thead><tr><th>Duration</th>' + COUNTS.map(c=>`<th class="mono">${c}</th>`).join('') + '</tr></thead><tbody>';
-  for(const d of DURATIONS){
-    html += `<tr><td>${d}</td>`;
-    for(const c of COUNTS){
-      const r = latestByDurCount.get(`${d}|${c}`);
-      html += `<td class="mono">${fmt(r? r.usd_per_gpu_hr : null)}</td>`;
-    }
-    html += '</tr>';
-  }
-  html += '</tbody>';
-  tbl.innerHTML = html;
+  const val=pivot.get(`${duration}|${countSel}`); document.getElementById('kpiPrice').textContent=fmt(val);
+  const vals=COUNTS.map(c=>pivot.get(`${duration}|${c}`)).filter(v=>v!=null);
+  const min=vals.length?Math.min(...vals):null; const max=vals.length?Math.max(...vals):null;
+  document.getElementById('kpiMin').textContent=fmt(min); document.getElementById('kpiMax').textContent=fmt(max);
 
-  // KPI stats
-  const rowForSelection = latestByDurCount.get(`${duration}|${Number(countSel)}`);
-  document.getElementById('kpiPrice').textContent = fmt(rowForSelection? rowForSelection.usd_per_gpu_hr : null);
-  const vals = COUNTS.map(c=>{
-    const r = latestByDurCount.get(`${duration}|${c}`);
-    return r? r.usd_per_gpu_hr : null;
-  }).filter(v=>v!=null);
-  const min = vals.length? Math.min(...vals): null;
-  const max = vals.length? Math.max(...vals): null;
-  document.getElementById('kpiMin').textContent = fmt(min);
-  document.getElementById('kpiMax').textContent = fmt(max);
-
-  // Forward table (latest per startLabel) for the chosen duration & counts columns
-  const latestByStart = latestRowsByKey(RAW.filter(r=>r.gpu_type===gpu && DURATIONS.includes(r.duration)), r=>`${r.gpu_type}|${r.start_label}|${r.duration}|${r.gpu_count}`);
-  const byStart = new Map();
-  for(const r of latestByStart.filter(r=>r.duration===duration)){
-    const k = r.start_label;
-    if(!byStart.has(k)) byStart.set(k, new Map());
-    byStart.get(k).set(r.gpu_count, r.usd_per_gpu_hr);
-  }
-  const starts = preferredStartOrder(uniq(Array.from(byStart.keys())));
-  let fhtml = '<thead><tr><th>Start</th>' + COUNTS.map(c=>`<th class="mono">${c}</th>`).join('') + '</tr></thead><tbody>';
-  for(const s of starts){
-    fhtml += `<tr><td>${s}</td>`;
-    const row = byStart.get(s) || new Map();
-    for(const c of COUNTS){ fhtml += `<td class="mono">${fmt(row.get(c))}</td>`; }
-    fhtml += '</tr>';
-  }
-  fhtml += '</tbody>';
-  document.getElementById('forwardTable').innerHTML = fhtml;
-
-  // History chart for the selected dimension
-  const series = RAW.filter(r => r.gpu_type===gpu && r.duration===duration && r.start_label===startLabel && r.gpu_count===Number(countSel) && r.usd_per_gpu_hr!=null)
-                    .sort((a,b)=>String(a.ts_utc).localeCompare(String(b.ts_utc)));
-  const labels = series.map(r=>r.ts_utc);
-  const y = series.map(r=>r.usd_per_gpu_hr);
-
-  const ctx = document.getElementById('histChart').getContext('2d');
-  if(chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type:'line',
-    data:{ labels, datasets:[{ label:`${gpu} · ${duration} · ${startLabel} · ${Number(countSel)} GPUs`, data:y, tension:.2 }]},
-    options:{ responsive:true, maintainAspectRatio:false, scales:{ x:{ticks:{maxRotation:0,autoSkip:true}}, y:{ beginAtZero:false } } }
-  });
+  // History series for GPU/duration/count using only today snapshots
+  const series=todayRows.filter(r=>r.duration===duration && r.gpu_count===countSel && r.usd_per_gpu_hr!=null).sort((a,b)=>String(a.ts_utc).localeCompare(String(b.ts_utc)));
+  const labels=series.map(r=>r.ts_utc); const y=series.map(r=>r.usd_per_gpu_hr);
+  const ctx=document.getElementById('histChart').getContext('2d'); if(chart) chart.destroy();
+  chart=new Chart(ctx,{type:'line', data:{labels, datasets:[{label:`${gpu} · ${duration} · ${countSel} GPUs`, data:y, tension:.2}]}, options:{responsive:true,maintainAspectRatio:false,scales:{x:{ticks:{maxRotation:0,autoSkip:true}},y:{beginAtZero:false}}}});
 }
 
 async function main(){
-  document.getElementById('lastRefresh').textContent = 'loading…';
-  RAW = (await csv(HISTORY_PATH)).map(coerceRow);
+  document.getElementById('lastRefresh').textContent='loading…';
+  RAW=(await csv(HISTORY_PATH)).map(coerceRow);
+  // Keep only today rows OR rows without start_label
+  RAW=RAW.filter(r=>r.start_label==='today');
 
-  // Discover available values from data
-  const gpus = uniq(RAW.map(r=>r.gpu_type)).sort();
-  const durs = DURATIONS;
-  START_LABELS = preferredStartOrder(uniq(RAW.map(r=>r.start_label)));
+  const gpus=uniq(RAW.map(r=>r.gpu_type)).sort();
+  const durs=[...DURATIONS];
+  const counts=uniq(RAW.map(r=>r.gpu_count)).sort((a,b)=>a-b);
 
-  buildSelect(document.getElementById('gpu'), gpus);
-  buildSelect(document.getElementById('duration'), durs);
-  buildSelect(document.getElementById('start'), START_LABELS);
-  buildSelect(document.getElementById('count'), COUNTS.map(String));
+  document.getElementById('gpu').innerHTML=gpus.map(v=>`<option>${v}</option>`).join('');
+  document.getElementById('duration').innerHTML=durs.map(v=>`<option>${v}</option>`).join('');
+  document.getElementById('count').innerHTML=counts.map(v=>`<option>${v}</option>`).join('');
 
-  const now = new Date();
-  document.getElementById('lastRefresh').textContent = 'loaded ' + now.toISOString().slice(0,19) + 'Z';
+  const now=new Date(); document.getElementById('lastRefresh').textContent='loaded '+now.toISOString().slice(0,19)+'Z';
   updateUI();
-
-  ['gpu','duration','start','count'].forEach(id=>{
-    document.getElementById(id).addEventListener('change', updateUI);
-  });
+  ['gpu','duration','count'].forEach(id=>document.getElementById(id).addEventListener('change', updateUI));
 }
-
-main().catch(err=>{
-  console.error(err);
-  document.getElementById('lastRefresh').textContent = 'failed to load';
-});
+main().catch(e=>{console.error(e); document.getElementById('lastRefresh').textContent='failed to load';});
 </script>
 </body>
 </html>
+
 
 
