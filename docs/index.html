@@ -9,7 +9,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root{--bg:#0b0c10;--card:#151720;--muted:#9aa0aa;--text:#e8eaed;--accent:#6aa9ff}
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial}
     a{color:var(--accent);text-decoration:none}
     .wrap{max-width:1150px;margin:24px auto;padding:0 16px}
     header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
@@ -34,7 +34,7 @@
 <div class="wrap">
   <header>
     <h1>SFCompute Pricing (Today)</h1>
-    <div class="muted">Data source: <code>sfcompute_grid/sf_history.csv</code> (filters to <em>today</em> if present; falls back if not)</div>
+    <div class="muted">Data source: <code>sfcompute_grid/grid_history.csv</code></div>
   </header>
 
   <div class="card">
@@ -73,77 +73,101 @@
 </div>
 
 <script>
-const HISTORY_PATH = 'sfcompute_grid/sf_history.csv'; // point dashboard here
-const DURATIONS = ["1 hour","1 day","1 week","1 month"];
-const COUNTS = [8,16,32,64,128,256];
-let RAW=[]; let chart;
+  // ✅ Match your repo: use grid_history.csv (with cache-busting to avoid stale Pages cache)
+  const HISTORY_PATH = 'sfcompute_grid/grid_history.csv?ts=' + Date.now();
 
-function csv(url){return new Promise((res,rej)=>Papa.parse(url,{download:true,header:true,dynamicTyping:true,skipEmptyLines:true,complete:r=>res(r.data),error:rej}))}
-function uniq(a){return Array.from(new Set(a))}
-function fmt(x){return (x==null||Number.isNaN(x))? '—' : `$${Number(x).toFixed(2)}`}
+  const DURATIONS = ["1 hour","1 day","1 week","1 month"];
+  const COUNTS = [8,16,32,64,128,256];
+  let RAW=[], chart;
 
-function coerceRow(r){
-  r.gpu_count=Number(r.gpu_count); r.usd_per_gpu_hr=(r.usd_per_gpu_hr===''||r.usd_per_gpu_hr==null)?null:Number(r.usd_per_gpu_hr);
-  // treat rows with missing start_label as 'today'
-  r.start_label=r.start_label||'today';
-  return r;
-}
+  function csv(url){return new Promise((res,rej)=>Papa.parse(url,{download:true,header:true,dynamicTyping:true,skipEmptyLines:true,complete:r=>res(r.data),error:rej}))}
+  function uniq(a){return Array.from(new Set(a))}
+  function fmt(x){return (x==null||Number.isNaN(x))? '—' : `$${Number(x).toFixed(2)}`}
 
-function latestRowsByKey(rows,keyFn){const m=new Map(); for(const r of rows){const k=keyFn(r); const p=m.get(k); if(!p||String(r.ts_utc)>String(p.ts_utc)) m.set(k,r);} return [...m.values()]}
+  function coerceRow(r){
+    r.gpu_count = Number(r.gpu_count);
+    r.usd_per_gpu_hr = (r.usd_per_gpu_hr===''||r.usd_per_gpu_hr==null)? null : Number(r.usd_per_gpu_hr);
+    // Older history has no start_label; treat as 'today'
+    if(r.start_label===undefined || r.start_label==='') r.start_label='today';
+    return r;
+  }
 
-function updateUI(){
-  const gpu=document.getElementById('gpu').value;
-  const duration=document.getElementById('duration').value;
-  const countSel=Number(document.getElementById('count').value);
+  function latestRowsByKey(rows,keyFn){
+    const m=new Map();
+    for(const r of rows){
+      const k=keyFn(r), p=m.get(k);
+      if(!p || String(r.ts_utc)>String(p.ts_utc)) m.set(k,r);
+    }
+    return [...m.values()];
+  }
 
-  // Only today rows (or rows with no start_label)
-  const todayRows=RAW.filter(r=>r.start_label==='today' && r.gpu_type===gpu);
-  const latest=latestRowsByKey(todayRows, r=>`${r.gpu_type}|${r.duration}|${r.gpu_count}`);
+  function updateUI(){
+    const gpu=document.getElementById('gpu').value;
+    const duration=document.getElementById('duration').value;
+    const countSel=Number(document.getElementById('count').value);
 
-  let newestTs='';
-  const pivot=new Map();
-  for(const r of latest){ if(String(r.ts_utc)>newestTs) newestTs=String(r.ts_utc); pivot.set(`${r.duration}|${r.gpu_count}`, r.usd_per_gpu_hr); }
-  document.getElementById('kpiDate').textContent=newestTs||'—';
+    // today-only
+    const todayRows = RAW.filter(r=>r.start_label==='today' && r.gpu_type===gpu);
+    const latest = latestRowsByKey(todayRows, r=>`${r.gpu_type}|${r.duration}|${r.gpu_count}`);
 
-  const tbl=document.getElementById('latestTable');
-  let html='<thead><tr><th>Duration</th>'+COUNTS.map(c=>`<th class="mono">${c}</th>`).join('')+'</tr></thead><tbody>';
-  for(const d of DURATIONS){ html+=`<tr><td>${d}</td>`; for(const c of COUNTS){ html+=`<td class="mono">${fmt(pivot.get(`${d}|${c}`))}</td>`;} html+='</tr>'; }
-  html+='</tbody>'; tbl.innerHTML=html;
+    // pivot + newest ts
+    let newestTs=''; const pivot=new Map();
+    for(const r of latest){ if(String(r.ts_utc)>newestTs) newestTs=String(r.ts_utc); pivot.set(`${r.duration}|${r.gpu_count}`, r.usd_per_gpu_hr); }
+    document.getElementById('kpiDate').textContent=newestTs||'—';
 
-  const val=pivot.get(`${duration}|${countSel}`); document.getElementById('kpiPrice').textContent=fmt(val);
-  const vals=COUNTS.map(c=>pivot.get(`${duration}|${c}`)).filter(v=>v!=null);
-  const min=vals.length?Math.min(...vals):null; const max=vals.length?Math.max(...vals):null;
-  document.getElementById('kpiMin').textContent=fmt(min); document.getElementById('kpiMax').textContent=fmt(max);
+    // table
+    const tbl=document.getElementById('latestTable');
+    let html='<thead><tr><th>Duration</th>'+COUNTS.map(c=>`<th class="mono">${c}</th>`).join('')+'</tr></thead><tbody>';
+    for(const d of DURATIONS){
+      html+=`<tr><td>${d}</td>`;
+      for(const c of COUNTS){ html+=`<td class="mono">${fmt(pivot.get(`${d}|${c}`))}</td>`; }
+      html+='</tr>';
+    }
+    html+='</tbody>'; tbl.innerHTML=html;
 
-  // History series for GPU/duration/count using only today snapshots
-  const series=todayRows.filter(r=>r.duration===duration && r.gpu_count===countSel && r.usd_per_gpu_hr!=null).sort((a,b)=>String(a.ts_utc).localeCompare(String(b.ts_utc)));
-  const labels=series.map(r=>r.ts_utc); const y=series.map(r=>r.usd_per_gpu_hr);
-  const ctx=document.getElementById('histChart').getContext('2d'); if(chart) chart.destroy();
-  chart=new Chart(ctx,{type:'line', data:{labels, datasets:[{label:`${gpu} · ${duration} · ${countSel} GPUs`, data:y, tension:.2}]}, options:{responsive:true,maintainAspectRatio:false,scales:{x:{ticks:{maxRotation:0,autoSkip:true}},y:{beginAtZero:false}}}});
-}
+    // KPIs
+    const val=pivot.get(`${duration}|${countSel}`);
+    document.getElementById('kpiPrice').textContent=fmt(val);
+    const vals=COUNTS.map(c=>pivot.get(`${duration}|${c}`)).filter(v=>v!=null);
+    const min=vals.length?Math.min(...vals):null, max=vals.length?Math.max(...vals):null;
+    document.getElementById('kpiMin').textContent=fmt(min);
+    document.getElementById('kpiMax').textContent=fmt(max);
 
-async function main(){
-  document.getElementById('lastRefresh').textContent='loading…';
-  RAW=(await csv(HISTORY_PATH)).map(coerceRow);
-  // Keep only today rows OR rows without start_label
-  RAW=RAW.filter(r=>r.start_label==='today');
+    // history series (today-only snapshots over time)
+    const series=todayRows.filter(r=>r.duration===duration && r.gpu_count===countSel && r.usd_per_gpu_hr!=null)
+                          .sort((a,b)=>String(a.ts_utc).localeCompare(String(b.ts_utc)));
+    const labels=series.map(r=>r.ts_utc), y=series.map(r=>r.usd_per_gpu_hr);
+    const ctx=document.getElementById('histChart').getContext('2d'); if(chart) chart.destroy();
+    chart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${gpu} · ${duration} · ${countSel} GPUs`,data:y,tension:.2}]},
+      options:{responsive:true,maintainAspectRatio:false,scales:{x:{ticks:{maxRotation:0,autoSkip:true}},y:{beginAtZero:false}}}});
+  }
 
-  const gpus=uniq(RAW.map(r=>r.gpu_type)).sort();
-  const durs=[...DURATIONS];
-  const counts=uniq(RAW.map(r=>r.gpu_count)).sort((a,b)=>a-b);
+  async function main(){
+    try{
+      document.getElementById('lastRefresh').textContent='loading…';
+      RAW=(await csv(HISTORY_PATH)).map(coerceRow);
+      // If file is empty or missing columns, bail gracefully
+      if(!RAW.length){ document.getElementById('lastRefresh').textContent='no data'; return; }
 
-  document.getElementById('gpu').innerHTML=gpus.map(v=>`<option>${v}</option>`).join('');
-  document.getElementById('duration').innerHTML=durs.map(v=>`<option>${v}</option>`).join('');
-  document.getElementById('count').innerHTML=counts.map(v=>`<option>${v}</option>`).join('');
+      const gpus=uniq(RAW.map(r=>r.gpu_type)).sort();
+      const counts=uniq(RAW.map(r=>r.gpu_count)).sort((a,b)=>a-b);
+      document.getElementById('gpu').innerHTML=gpus.map(v=>`<option>${v}</option>`).join('');
+      document.getElementById('duration').innerHTML=DURATIONS.map(v=>`<option>${v}</option>`).join('');
+      document.getElementById('count').innerHTML=counts.map(v=>`<option>${v}</option>`).join('');
 
-  const now=new Date(); document.getElementById('lastRefresh').textContent='loaded '+now.toISOString().slice(0,19)+'Z';
-  updateUI();
-  ['gpu','duration','count'].forEach(id=>document.getElementById(id).addEventListener('change', updateUI));
-}
-main().catch(e=>{console.error(e); document.getElementById('lastRefresh').textContent='failed to load';});
+      document.getElementById('lastRefresh').textContent='loaded ' + new Date().toISOString().slice(0,19) + 'Z';
+      updateUI();
+      ['gpu','duration','count'].forEach(id=>document.getElementById(id).addEventListener('change', updateUI));
+    }catch(e){
+      console.error(e);
+      document.getElementById('lastRefresh').textContent='failed to load';
+    }
+  }
+  main();
 </script>
 </body>
 </html>
+
 
 
 
