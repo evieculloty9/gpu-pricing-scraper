@@ -5,11 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>SFCompute Pricing Dashboard</title>
 
-  <!-- REQUIRED: libraries must load BEFORE our script -->
+  <!-- libs must load before our script -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 
-  <!-- Minimal dark styling so everything is visible -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
@@ -25,11 +24,11 @@
     .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px}
     .span12{grid-column:span 12}.span8{grid-column:span 8}.span4{grid-column:span 4}
     .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    select,button{background:#0f1920;color:var(--fg);border:1px solid #22313a;border-radius:10px;padding:8px 10px}
+    select,input[type=date],button{background:#0f1920;color:var(--fg);border:1px solid #22313a;border-radius:10px;padding:8px 10px}
     button{cursor:pointer}
     table{width:100%;border-collapse:collapse}
     th,td{border-bottom:1px solid #1f2a31;padding:8px 6px;text-align:left;font-size:13px;white-space:nowrap}
-    th{color:var(--muted);font-weight:600;cursor:pointer}
+    th{color:var(--muted);font-weight:600}
     .chip{display:inline-block;padding:2px 8px;border:1px solid #2a3a44;border-radius:999px;font-size:12px;margin-left:6px}
   </style>
 </head>
@@ -47,6 +46,8 @@
           <label class="muted" style="display:flex;align-items:center;gap:6px;">
             <input type="checkbox" id="allDurations"/> Compare all durations
           </label>
+          <label>From&nbsp;<input type="date" id="fromDate"></label>
+          <label>To&nbsp;<input type="date" id="toDate"></label>
           <button id="refreshBtn">Refresh</button>
           <span id="meta" class="muted"></span>
         </div>
@@ -68,12 +69,12 @@
           </div>
         </div>
         <p class="muted" style="margin-top:12px">
-          The top chart uses the latest snapshot (forward/scrape time on x-axis). A historical chart appears below.
+          Top chart = latest snapshot. Historical chart respects GPU, duration, and date range.
         </p>
       </div>
 
       <div class="card span12">
-        <h3 style="margin:0 0 8px 0;font-size:16px">Latest Snapshot</h3>
+        <h3 style="margin:0 0 8px 0;font-size:16px">Latest Snapshot (most recent run only)</h3>
         <div style="overflow:auto">
           <table id="latestTable"></table>
         </div>
@@ -81,12 +82,11 @@
     </div>
   </main>
 
-  <!-- Your dashboard JS (exactly what you sent) -->
   <script>
   const LATEST_PATH  = 'data/sfcompute_latest.csv';
   const HISTORY_PATH = 'data/sfcompute_history.csv';
 
-  const state = { latest: [], history: [], sortCol: 'start_time_iso', sortAsc: true };
+  const state = { latest: [], history: [], sortCol: 'gpu_model', sortAsc: true };
 
   // ---------- helpers ----------
   function csv(url){
@@ -121,12 +121,18 @@
       return new Intl.DateTimeFormat(undefined,{year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(d);
     }catch{ return String(d); }
   }
+  function toISODateUTC(dateObj){
+    // yyyy-mm-dd for UTC day
+    const y = dateObj.getUTCFullYear();
+    const m = String(dateObj.getUTCMonth()+1).padStart(2,'0');
+    const d = String(dateObj.getUTCDate()).padStart(2,'0');
+    return `${y}-${m}-${d}`;
+  }
   function normalise(df){
     df.forEach(r=>{
       r.gpu_model = r.gpu_model || r.gpu_type || r.gpu || r.gpuModel;
       r.price_hourly_usd = r.price_hourly_usd ?? r.usd_per_gpu_hr ?? r.price ?? r.hourly ?? r.pricePerHour;
       r.duration_hours = r.duration_hours ?? parseDurationToHours(r.duration) ?? parseDurationToHours(r.duration_label);
-      // prefer real forward start time if present; else ts_utc; else captured_at
       r.start_time_iso = r.start_time_iso || r.start_time || r.ts_utc || r.start || r.start_at || r.captured_at_iso;
       if (typeof r.start_time_iso === 'string' && r.start_time_iso.trim() !== ''){
         const d = new Date(r.start_time_iso); if (!isNaN(d)) r.start_time_iso = d;
@@ -147,7 +153,18 @@
     state.latest  = normalise(latest);
     state.history = normalise(history);
 
+    // populate filters
     buildFilters();
+
+    // set default date range to full history
+    const allDates = state.history.map(r => (r.captured_at_iso instanceof Date ? r.captured_at_iso : r.start_time_iso));
+    if (allDates.length){
+      const min = new Date(Math.min(...allDates.map(d=>d.getTime())));
+      const max = new Date(Math.max(...allDates.map(d=>d.getTime())));
+      document.getElementById('fromDate').value = toISODateUTC(min);
+      document.getElementById('toDate').value   = toISODateUTC(max);
+    }
+
     render();
 
     // last updated stamp
@@ -158,7 +175,7 @@
     // meta chips
     const meta = document.getElementById('meta');
     const durs = unique(state.history,'duration_hours').map(Number).sort((a,b)=>a-b).map(h=>`<span class="chip">${hoursToLabel(h)}</span>`).join('');
-    meta.innerHTML = `Durations detected: ${durs || '<span class="chip">none</span>'}`;
+    meta.innerHTML = `Durations: ${durs || '<span class="chip">none</span>'}`;
   }
 
   function buildFilters(){
@@ -177,6 +194,8 @@
     durSel.addEventListener('change', render);
     document.getElementById('allDurations').addEventListener('change', render);
     document.getElementById('refreshBtn').addEventListener('click', ()=>load());
+    document.getElementById('fromDate').addEventListener('change', render);
+    document.getElementById('toDate').addEventListener('change', render);
   }
 
   // ---------- render ----------
@@ -185,7 +204,12 @@
     const dur = Number(document.getElementById('durSelect').value);
     const compareAll = document.getElementById('allDurations').checked;
 
-    // ---- Forward curve (from LATEST) ----
+    const fromVal = document.getElementById('fromDate').value;
+    const toVal   = document.getElementById('toDate').value;
+    const fromD = fromVal ? new Date(fromVal+'T00:00:00Z') : null;
+    const toD   = toVal   ? new Date(toVal  +'T23:59:59Z') : null;
+
+    // ---- Forward curve (LATEST) ----
     let traces = [];
     const latestSet = state.latest.filter(d=>String(d.gpu_model)===String(gpu));
     if (compareAll){
@@ -227,23 +251,24 @@
     document.getElementById('kpiMin').textContent    = prices.length ? `$${Math.min(...prices).toFixed(2)}` : '–';
     document.getElementById('kpiMax').textContent    = prices.length ? `$${Math.max(...prices).toFixed(2)}` : '–';
 
-    // ---- History chart (from HISTORY by capture time) ----
-    const gpuHist = state.history.filter(d=>String(d.gpu_model)===String(gpu));
+    // ---- Historical chart (HISTORY + date range) ----
+    const gpuHist = state.history.filter(d=>String(d.gpu_model)===String(gpu))
+      .filter(d=>{
+        const t = (d.captured_at_iso instanceof Date ? d.captured_at_iso : d.start_time_iso);
+        return (!fromD || t>=fromD) && (!toD || t<=toD);
+      });
+
     const durGroups = compareAll ? unique(gpuHist,'duration_hours').map(Number).filter(Number.isFinite).sort((a,b)=>a-b) : [dur];
     const histTraces = [];
     for (const dh of durGroups){
-      const rows = gpuHist.filter(d=>Number(d.duration_hours)===dh).slice().sort((a,b)=>{
-        const ta = (a.captured_at_iso instanceof Date ? a.captured_at_iso : a.start_time_iso).getTime();
-        const tb = (b.captured_at_iso instanceof Date ? b.captured_at_iso : b.start_time_iso).getTime();
-        return ta - tb;
-      });
+      const rows = gpuHist.filter(d=>Number(d.duration_hours)===dh);
       if (!rows.length) continue;
 
-      // daily median (smoothing)
+      // aggregate by UTC day median
       const byDay = new Map();
       for (const r of rows){
         const t = (r.captured_at_iso instanceof Date ? r.captured_at_iso : r.start_time_iso);
-        const key = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate())).toISOString().slice(0,10);
+        const key = toISODateUTC(t);
         if (!byDay.has(key)) byDay.set(key, []);
         byDay.get(key).push(Number(r.price_hourly_usd));
       }
@@ -262,20 +287,26 @@
       wrap.className = 'card span12';
       wrap.innerHTML = `<h3 style="margin:0 0 8px 0;font-size:16px">Historical Trend (by scrape date)</h3><div id="${nodeId}" style="height:380px"></div>`;
       document.querySelector('.grid').appendChild(wrap);
+      node = document.getElementById(nodeId);
     }
     Plotly.newPlot(nodeId, histTraces, {
       margin:{l:60,r:20,t:10,b:50},
       paper_bgcolor:'transparent', plot_bgcolor:'transparent',
-      xaxis:{title:'Scrape date', gridcolor:'#22313a'},
+      xaxis:{title:'Scrape date (UTC day)', gridcolor:'#22313a'},
       yaxis:{title:'$/GPU/hour', gridcolor:'#22313a'},
       font:{color:'#e6eef2'}
     }, {displayModeBar:false, responsive:true});
 
-    // ---- Latest table for selection ----
-    const tableRows = compareAll
-      ? state.latest.filter(d=>String(d.gpu_model)===String(gpu))
-      : state.latest.filter(d=>String(d.gpu_model)===String(gpu) && Number(d.duration_hours)===dur);
-    buildTable(tableRows);
+    // ---- Latest table = ONLY most recent run ----
+    const snapTimes = state.latest.map(r => (r.captured_at_iso instanceof Date ? r.captured_at_iso : r.start_time_iso));
+    const newest = snapTimes.length ? new Date(Math.max(...snapTimes.map(d=>d.getTime()))) : null;
+    const latestRows = newest
+      ? state.latest.filter(r => {
+          const t = (r.captured_at_iso instanceof Date ? r.captured_at_iso : r.start_time_iso);
+          return t.getTime() === newest.getTime();
+        })
+      : [];
+    buildTable(latestRows);
   }
 
   function buildTable(rows){
@@ -295,12 +326,8 @@
 
     const body = document.createElement('tbody');
     const sorted = rows.slice().sort((a,b)=>{
-      const k = state.sortCol;
-      const av = a[k]; const bv = b[k];
-      if (av===bv) return 0;
-      if (av==null) return 1;
-      if (bv==null) return -1;
-      return (av>bv?1:-1) * (state.sortAsc?1:-1);
+      const av = String(a.gpu_model).localeCompare(String(b.gpu_model)) || (Number(a.gpu_count||0)-Number(b.gpu_count||0));
+      return av;
     });
 
     for (const r of sorted){
@@ -316,22 +343,11 @@
       body.appendChild(tr);
     }
     table.appendChild(body);
-
-    // header click sorting
-    table.querySelectorAll('th').forEach(th=>{
-      th.onclick = ()=>{
-        const k = th.getAttribute('data-k');
-        if (!k) return;
-        if (state.sortCol===k) state.sortAsc = !state.sortAsc; else { state.sortCol = k; state.sortAsc = true; }
-        buildTable(rows);
-      };
-    });
   }
 
   load();
   </script>
 </body>
 </html>
-
 
 
