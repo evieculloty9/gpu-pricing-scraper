@@ -1,27 +1,55 @@
-name: SF Grid Scrape Notebook
+name: SF Grid — scrape + publish
+
 on:
   schedule:
-    - cron: "15 7 * * *"   
-  workflow_dispatch:        
+    - cron: "7 7 * * *"      # runs daily at 07:07 UTC
+  workflow_dispatch: {}       # allow manual run
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - run: pip install pandas playwright nest_asyncio jupyter papermill
-      - run: python -m playwright install --with-deps
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas jupyter nbconvert
+          # If your scraper needs extra libs, add them here
+          # e.g. Playwright:
+          # pip install playwright
+          # python -m playwright install --with-deps chromium
 
-      
-      - run: papermill sf_grid_scrape.ipynb executed_sf_grid_scrape.ipynb
+      # If your scraper is a notebook, execute it:
+      - name: Run scraper notebook
+        run: |
+          jupyter nbconvert --to notebook --execute --inplace sf_grid_scrape.ipynb
 
-      
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sf_quotes_outputs
-          path: sfcompute_grid/
+      # Build/refresh the dashboard datasets
+      - name: Build dashboard data
+        run: |
+          mkdir -p docs/data
+          python - <<'PY'
+import pandas as pd, glob, os
+files = sorted(glob.glob("sfcompute_grid/*.csv"))
+if not files:
+    raise SystemExit("No CSV files found in sfcompute_grid/")
+dfs = [pd.read_csv(f) for f in files]
+hist = pd.concat(dfs, ignore_index=True).drop_duplicates()
+hist.to_csv("docs/data/sfcompute_history.csv", index=False)
+pd.read_csv(files[-1]).to_csv("docs/data/sfcompute_latest.csv", index=False)
+print("Wrote docs/data/sfcompute_latest.csv and docs/data/sfcompute_history.csv")
+PY
+
+      - name: Commit dashboard & data
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add docs/data/*.csv docs/index.html
+          git commit -m "Publish SFCompute dashboard data" || echo "No changes"
+          git push
