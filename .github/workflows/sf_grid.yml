@@ -2,8 +2,8 @@ name: SF Grid — scrape + publish
 
 on:
   schedule:
-    - cron: "7 7 * * *"      # runs daily at 07:07 UTC
-  workflow_dispatch: {}       # allow manual run
+    - cron: "0 */2 * * *"   # every 2 hours
+  workflow_dispatch: {}       # run manually if needed
 
 jobs:
   run:
@@ -20,17 +20,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas jupyter nbconvert
-          # If your scraper needs extra libs, add them here
-          # e.g. Playwright:
-          # pip install playwright
-          # python -m playwright install --with-deps chromium
+          # add any libs your scraper needs (playwright, requests, etc.)
 
-      # If your scraper is a notebook, execute it:
       - name: Run scraper notebook
         run: |
           jupyter nbconvert --to notebook --execute --inplace sf_grid_scrape.ipynb
 
-      # Build/refresh the dashboard datasets
       - name: Build dashboard data
         run: |
           mkdir -p docs/data
@@ -46,10 +41,11 @@ pd.read_csv(files[-1]).to_csv("docs/data/sfcompute_latest.csv", index=False)
 print("Wrote docs/data/sfcompute_latest.csv and docs/data/sfcompute_history.csv")
 PY
 
-      - name: Commit dashboard & data
+      - name: Commit dashboard data
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add docs/data/*.csv docs/index.html
-          git commit -m "Publish SFCompute dashboard data" || echo "No changes"
+          git add docs/data/*.csv
+          git commit -m "Update dashboard data" || echo "No changes"
           git push
+
