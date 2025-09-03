@@ -20,18 +20,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas jupyter nbconvert
-          # add any extra libs your scraper needs (e.g. playwright, requests)
+          # add any extra libs your scraper needs (playwright, requests, etc.)
           # pip install playwright
           # python -m playwright install --with-deps chromium
 
       - name: Run scraper notebook
-        shell: bash
         run: |
-          # IMPORTANT: use two hyphens -- not “–”
           jupyter nbconvert --to notebook --execute --inplace sf_grid_scrape.ipynb
 
-            - name: Build dashboard data
-        shell: bash
+      - name: Build dashboard data
         run: |
           set -euo pipefail
           mkdir -p docs/data
@@ -51,13 +48,12 @@ jobs:
           print("Wrote docs/data/sfcompute_latest.csv and docs/data/sfcompute_history.csv")
           PY
 
-
       - name: Commit dashboard data
-        shell: bash
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           git add docs/data/*.csv
           git commit -m "Update dashboard data" || echo "No changes"
           git push
+
 
