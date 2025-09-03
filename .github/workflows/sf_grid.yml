@@ -2,27 +2,33 @@ name: SF Grid — scrape + publish
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # every 2 hours
-  workflow_dispatch: {}      # allow manual run
+    - cron: "0 */2 * * *"     # every 2 hours
+  workflow_dispatch: {}
 
 permissions:
   contents: write
+
+# Avoid two runs writing at once (race -> non-fast-forward)
+concurrency:
+  group: sfcompute-data
+  cancel-in-progress: true
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0            # we need full history for pull/rebase
 
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pandas jupyter nbconvert
-          # add any extra libs your scraper needs (e.g. playwright, requests)
           # pip install playwright
           # python -m playwright install --with-deps chromium
 
@@ -30,16 +36,28 @@ jobs:
         run: |
           jupyter nbconvert --to notebook --execute --inplace sf_grid_scrape.ipynb
 
-      # commit raw timestamped CSVs in sfcompute_grid/
+      # --- Commit raw timestamped CSVs ---
       - name: Commit raw scrape CSVs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
         run: |
-          git config user.name "github-actions"
+          set -e
+          git config user.name  "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           git add sfcompute_grid/*.csv || true
-          git commit -m "Add raw scrape CSV(s)" || echo "No new raw CSVs"
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "HEAD:${{ github.ref_name }}"
+          # If nothing to add, stop early
+          if git diff --cached --quiet; then
+            echo "No new raw CSVs to commit."
+          else
+            git commit -m "Add raw scrape CSV(s)"
+            # sync with remote before pushing to avoid non-fast-forward
+            git pull --rebase "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "${BRANCH}"
+            git push  "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+          fi
 
-      # aggregate history + latest for the dashboard
+      # --- Build dashboard data (history + latest) ---
       - name: Build dashboard data
         run: |
           set -euo pipefail
@@ -55,13 +73,25 @@ jobs:
           print(f"Aggregated {len(files)} files into docs/data/sfcompute_history.csv")
           PY
 
+      # --- Commit dashboard CSVs ---
       - name: Commit dashboard data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
         run: |
-          git config user.name "github-actions"
+          set -e
+          git config user.name  "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add docs/data/*.csv
-          git commit -m "Update dashboard data" || echo "No changes"
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "HEAD:${{ github.ref_name }}"
+          git add docs/data/*.csv || true
+          if git diff --cached --quiet; then
+            echo "No dashboard changes."
+          else
+            git commit -m "Update dashboard data"
+            git pull --rebase "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "${BRANCH}"
+            git push  "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+          fi
+
 
 
 
