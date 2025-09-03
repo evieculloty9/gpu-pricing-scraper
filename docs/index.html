@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SFCompute Pricing Dashboard</title>
+  <!-- Minimal styling -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg:#0b1215; --fg:#e6eef2; --muted:#9fb2bd; --card:#111a1f; --accent:#5ac8fa; }
+    html,body{height:100%;}
+    body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);} 
+    header{padding:20px 24px;border-bottom:1px solid #1e2a30;background:linear-gradient(180deg,#0d1519,transparent)}
+    h1{margin:0;font-size:20px;letter-spacing:.3px}
+    main{padding:20px 24px;max-width:1200px;margin:0 auto}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+    .card{background:var(--card);border:1px solid #1e2a30;border-radius:16px;padding:16px}
+    .span12{grid-column:span 12}
+    .span8{grid-column:span 8}
+    .span4{grid-column:span 4}
+    .kpi{display:flex;gap:16px}
+    .kpi .box{flex:1;background:#0f1920;border:1px solid #1f2a31;border-radius:12px;padding:12px}
+    .kpi .label{font-size:12px;color:var(--muted)}
+    .kpi .value{font-size:22px;font-weight:700}
+    select,button{background:#0f1920;color:var(--fg);border:1px solid #22313a;border-radius:10px;padding:8px 10px}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #1f2a31;padding:8px 6px;text-align:left;font-size:13px}
+    th{color:var(--muted);font-weight:600}
+    a{color:var(--accent);text-decoration:none}
+    .muted{color:var(--muted)}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>SFCompute Pricing Dashboard <span class="muted" id="stamp"></span></h1>
+  </header>
+
+  <main>
+    <div class="grid">
+      <div class="card span12">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+          <label>GPU
+            <select id="gpuSelect"></select>
+          </label>
+          <label>Duration
+            <select id="durSelect"></select>
+          </label>
+          <button id="refreshBtn">Refresh</button>
+          <span class="muted">Data source: <code>data/sfcompute_latest.csv</code> & <code>data/sfcompute_history.csv</code></span>
+        </div>
+      </div>
+
+      <div class="card span8">
+        <div id="priceChart" style="height:420px"></div>
+      </div>
+      <div class="card span4">
+        <div class="kpi">
+          <div class="box"><div class="label">Latest $/GPU/hr</div><div class="value" id="kpiLatest">–</div></div>
+          <div class="box"><div class="label">Min (history)</div><div class="value" id="kpiMin">–</div></div>
+          <div class="box"><div class="label">Max (history)</div><div class="value" id="kpiMax">–</div></div>
+        </div>
+        <p class="muted" style="margin-top:12px">The chart shows the **forward start times** on the x‑axis and quoted hourly price on the y‑axis for the selected GPU and duration.</p>
+      </div>
+
+      <div class="card span12">
+        <h3 style="margin:0 0 8px 0;font-size:16px">Latest Snapshot</h3>
+        <div style="overflow:auto">
+          <table id="latestTable"></table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // If this page is served via GitHub Pages from /docs, keep CSVs in docs/data
+    const LATEST_PATH = 'data/sfcompute_latest.csv';
+    const HISTORY_PATH = 'data/sfcompute_history.csv';
+
+    const state = { latest: [], history: [] };
+
+    function csv(url){
+      return new Promise((resolve, reject) => {
+        Papa.parse(url, {download:true, header:true, dynamicTyping:true, complete: res => resolve(res.data), error: reject});
+      });
+    }
+
+    async function load(){
+      [state.latest, state.history] = await Promise.all([csv(LATEST_PATH), csv(HISTORY_PATH)]);
+      // tidy up field names that might differ
+      for (const df of [state.latest, state.history]){
+        df.forEach(r=>{
+          // normalize names
+          if (r.duration && !r.duration_hours) {
+            // allow strings like '1 day', '1 hour'
+            const m = String(r.duration).match(/(\d+(?:\.\d+)?)\s*(hour|day|week)/i);
+            if (m){
+              const n = parseFloat(m[1]);
+              const u = m[2].toLowerCase();
+              r.duration_hours = u.startsWith('hour') ? n : u.startsWith('day') ? n*24 : n*168;
+            }
+          }
+          r.start_time_iso = r.start_time_iso || r.start_time || r.start;
+          r.gpu_model = r.gpu_model || r.gpu_type || r.gpu;
+          r.price_hourly_usd = r.price_hourly_usd || r.usd_per_gpu_hr || r.price;
+          if (typeof r.start_time_iso === 'string') r.start_time_iso = new Date(r.start_time_iso);
+        });
+      }
+      populateFilters();
+      render();
+    }
+
+    function unique(arr, key){
+      return [...new Set(arr.map(d=>d[key]).filter(x=>x!==undefined && x!==''))].sort((a,b)=>String(a).localeCompare(String(b)));
+    }
+
+    function populateFilters(){
+      const gpuSel = document.getElementById('gpuSelect');
+      const durSel = document.getElementById('durSelect');
+      gpuSel.innerHTML = '';
+      durSel.innerHTML = '';
+      for (const v of unique(state.history, 'gpu_model')){
+        const o = document.createElement('option'); o.value=o.textContent=v; gpuSel.appendChild(o);
+      }
+      for (const v of unique(state.history, 'duration_hours')){
+        const o = document.createElement('option'); o.value=v; o.textContent = hoursToLabel(v); durSel.appendChild(o);
+      }
+      gpuSel.selectedIndex = 0; durSel.selectedIndex = 0;
+      gpuSel.addEventListener('change', render);
+      durSel.addEventListener('change', render);
+      document.getElementById('refreshBtn').addEventListener('click', ()=>load());
+    }
+
+    function hoursToLabel(h){
+      h = Number(h);
+      if (h % 168 === 0) return (h/168) + ' week' + (h/168>1?'s':'');
+      if (h % 24 === 0) return (h/24) + ' day' + (h/24>1?'s':'');
+      return h + ' hour' + (h>1?'s':'');
+    }
+
+    function render(){
+      const gpu = document.getElementById('gpuSelect').value;
+      const dur = Number(document.getElementById('durSelect').value);
+      const latest = state.latest.filter(d=>String(d.gpu_model)===String(gpu) && Number(d.duration_hours)===dur)
+                                 .sort((a,b)=>a.start_time_iso-b.start_time_iso);
+      const hist = state.history.filter(d=>String(d.gpu_model)===String(gpu) && Number(d.duration_hours)===dur)
+                                .sort((a,b)=>a.start_time_iso-b.start_time_iso);
+
+      // KPIs
+      const latestPrice = latest.length ? latest[latest.length-1].price_hourly_usd : null;
+      const prices = hist.map(d=>Number(d.price_hourly_usd)).filter(Number.isFinite);
+      document.getElementById('kpiLatest').textContent = latestPrice!=null? `$${latestPrice.toFixed(2)}` : '–';
+      document.getElementById('kpiMin').textContent = prices.length? `$${Math.min(...prices).toFixed(2)}` : '–';
+      document.getElementById('kpiMax').textContent = prices.length? `$${Math.max(...prices).toFixed(2)}` : '–';
+      document.getElementById('stamp').textContent = latest.length? ` · updated ${new Date().toLocaleString()}` : '';
+
+      // Chart
+      const trace = {
+        x: latest.map(d=>d.start_time_iso),
+        y: latest.map(d=>d.price_hourly_usd),
+        type:'scatter', mode:'lines+markers', name: `${gpu} · ${hoursToLabel(dur)}`
+      };
+      const layout = {
+        margin:{l:50,r:20,t:20,b:50},
+        paper_bgcolor:'transparent', plot_bgcolor:'transparent',
+        xaxis:{title:'Start time (forward)', gridcolor:'#22313a'},
+        yaxis:{title:'$/GPU/hour', gridcolor:'#22313a'},
+        font:{color:'#e6eef2'}
+      };
+      Plotly.newPlot('priceChart',[trace],layout,{displayModeBar:false, responsive:true});
+
+      // Table (latest snapshot)
+      const table = document.getElementById('latestTable');
+      table.innerHTML = '';
+      const head = document.createElement('thead');
+      head.innerHTML = '<tr><th>GPU</th><th>Start</th><th>Duration</th><th>$ / GPU / hr</th><th>Source</th></tr>';
+      table.appendChild(head);
+      const body = document.createElement('tbody');
+      for (const r of latest){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${r.gpu_model||''}</td><td>${r.start_time_iso?.toLocaleString?.()||r.start_time_iso}</td><td>${hoursToLabel(r.duration_hours)}</td><td>$${Number(r.price_hourly_usd).toFixed(2)}</td><td>${r.quote_source||''}</td>`;
+        body.appendChild(tr);
+      }
+      table.appendChild(body);
+    }
+
+    load();
+  </script>
+</body>
+</html>
