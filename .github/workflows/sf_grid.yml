@@ -30,26 +30,27 @@ jobs:
           # IMPORTANT: use two hyphens -- not “–”
           jupyter nbconvert --to notebook --execute --inplace sf_grid_scrape.ipynb
 
-      - name: Build dashboard data
+            - name: Build dashboard data
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p docs/data
           python - <<'PY'
-import glob
-import pandas as pd
+          import glob
+          import pandas as pd
 
-files = sorted(glob.glob("sfcompute_grid/*.csv"))
-if not files:
-    raise SystemExit("No CSV files found in sfcompute_grid/")
+          files = sorted(glob.glob("sfcompute_grid/*.csv"))
+          if not files:
+              raise SystemExit("No CSV files found in sfcompute_grid/")
 
-dfs = [pd.read_csv(f) for f in files]
-hist = pd.concat(dfs, ignore_index=True).drop_duplicates()
+          dfs = [pd.read_csv(f) for f in files]
+          hist = pd.concat(dfs, ignore_index=True).drop_duplicates()
 
-hist.to_csv("docs/data/sfcompute_history.csv", index=False)
-pd.read_csv(files[-1]).to_csv("docs/data/sfcompute_latest.csv", index=False)
-print("Wrote docs/data/sfcompute_latest.csv and docs/data/sfcompute_history.csv")
-PY
+          hist.to_csv("docs/data/sfcompute_history.csv", index=False)
+          pd.read_csv(files[-1]).to_csv("docs/data/sfcompute_latest.csv", index=False)
+          print("Wrote docs/data/sfcompute_latest.csv and docs/data/sfcompute_history.csv")
+          PY
+
 
       - name: Commit dashboard data
         shell: bash
