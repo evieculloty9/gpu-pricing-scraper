@@ -93,22 +93,24 @@ jobs:
 
       # --- Commit dashboard CSVs ---
       - name: Commit dashboard data
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
         run: |
           set -e
-          git config user.name  "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          git add docs/data/*.csv || true
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sfcompute_grid/grid_history.csv docs/data/sfcompute_history.csv docs/data/sfcompute_latest.csv || true
           if git diff --cached --quiet; then
             echo "No dashboard changes."
-          else
-            git commit -m "Update dashboard data"
-            git pull --rebase "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "${BRANCH}"
-            git push  "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+            exit 0
           fi
+          # Rebase onto the latest main to avoid non-fast-forward errors
+          git fetch origin main
+          git rebase origin/main || git rebase --abort
+          git commit -m "Update dashboard data [skip ci]"
+          git push origin HEAD:main
+
+
+
+
 
 
 
