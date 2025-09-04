@@ -6,7 +6,10 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: write            # allow commit & push
+  pull-requests: write       # (needed if you choose PR route below)
+  pages: write              
+  id-token: write 
 
 # Avoid two runs writing at once (race -> non-fast-forward)
 concurrency:
