@@ -6,12 +6,11 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write            # allow commit & push
-  pull-requests: write       # (needed if you choose PR route below)
-  pages: write              
-  id-token: write 
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
 
-# Avoid two runs writing at once (race -> non-fast-forward)
 concurrency:
   group: sfcompute-data
   cancel-in-progress: true
@@ -22,7 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0            # we need full history for pull/rebase
+          fetch-depth: 0
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -40,41 +40,6 @@ jobs:
           jupyter nbconvert --to notebook --execute sf_grid_scrape.ipynb \
           --output sf_grid_scrape_executed --output-dir .
 
-
-      # --- Commit raw timestamped CSVs ---
-      - name: Commit raw scrape CSVs
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          set -e
-          git config user.name  "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-      
-          # stage new CSVs only
-          git add sfcompute_grid/*.csv || true
-      
-          if git diff --cached --quiet; then
-            echo "No new raw CSVs to commit."
-          else
-            git commit -m "Add raw scrape CSV(s)"
-            # pull with autostash to avoid 'unstaged changes' issues
-            git pull --rebase --autostash "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "${BRANCH}"
-            git push  "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
-          fi
-      - name: Configure git user
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Commit and push updated data
-        run: |
-          git add sfcompute_grid/grid_history.csv docs/data/sfcompute_history.csv docs/data/sfcompute_latest.csv
-          git status
-          git commit -m "Update dashboard data [skip ci]" || echo "No changes to commit"
-          git push
-
       # --- Build dashboard data (history + latest) ---
       - name: Build dashboard data
         run: |
@@ -91,22 +56,36 @@ jobs:
           print(f"Aggregated {len(files)} files into docs/data/sfcompute_history.csv")
           PY
 
-      # --- Commit dashboard CSVs ---
-      - name: Commit dashboard data
+      # --- Commit + rebase + push (single atomic step) ---
+      - name: Commit and push updated data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: main
         run: |
           set -e
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add sfcompute_grid/grid_history.csv docs/data/sfcompute_history.csv docs/data/sfcompute_latest.csv || true
+          git checkout "$BRANCH"
+
+          # Stage everything produced by this run
+          git add sfcompute_grid/*.csv docs/data/sfcompute_*.csv || true
+
+          # Nothing new? Exit cleanly.
           if git diff --cached --quiet; then
-            echo "No dashboard changes."
+            echo "No changes to commit."
             exit 0
           fi
-          # Rebase onto the latest main to avoid non-fast-forward errors
-          git fetch origin main
-          git rebase origin/main || git rebase --abort
-          git commit -m "Update dashboard data [skip ci]"
-          git push origin HEAD:main
+
+          # Commit FIRST (clean index), THEN rebase and push
+          git commit -m "Update SF grid data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
+
+          # Rebase our commit(s) on top of latest remote
+          git pull --rebase "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "$BRANCH"
+
+          # Push rebased head
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+
 
 
 
