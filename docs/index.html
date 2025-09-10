@@ -18,6 +18,7 @@
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
     label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
     select{background:#0e1117;border:1px solid #2a2f3a;color:var(--text);border-radius:10px;padding:8px 10px}
+    input[type="range"]{width:180px}
     .table-wrap{overflow:auto;border-radius:12px;border:1px solid #2a2f3a;margin-top:12px}
     table{border-collapse:separate;border-spacing:0;width:100%;min-width:560px}
     th,td{padding:8px 10px;border-bottom:1px solid #242a34}
@@ -89,17 +90,35 @@
     <div id="modelBadge" class="muted" style="margin-top:6px;font-size:12px">—</div>
   </div>
 
-  <!-- ALERTS -->
-  <div class="card">
-    <h3 style="margin-top:0;font-size:16px">Price Alerts</h3>
-    <div id="alertsBox" class="muted">Loading…</div>
+  <!-- ALERTS (compact, grouped) -->
+  <div class="card" id="alertsCard">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0;font-size:16px">Price Alerts</h3>
+      <div id="alertsBadge" class="muted">—</div>
+    </div>
+    <div id="alertsGroups" class="muted" style="margin-top:8px">Loading…</div>
   </div>
 
-  <!-- ROI -->
-  <div class="card">
-    <h3 style="margin-top:0;font-size:16px">ROI / Budget Calculator</h3>
-    <div class="table-wrap">
-      <table id="roiTable"></table>
+  <!-- ROI CALCULATOR (interactive) -->
+  <div class="card" id="roiCard">
+    <h3 style="margin:0 0 8px;font-size:16px">ROI / Budget Calculator</h3>
+    <div class="row" style="gap:10px;align-items:flex-end">
+      <div><label for="roiGpu">GPU</label><select id="roiGpu"></select></div>
+      <div><label for="roiDur">Duration</label><select id="roiDur"></select></div>
+      <div><label for="roiCount">GPU Count</label><select id="roiCount"></select></div>
+      <div style="min-width:180px">
+        <label for="roiUtil">Utilisation: <span id="roiUtilVal">75%</span></label>
+        <input id="roiUtil" type="range" min="10" max="100" step="5" value="75">
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div class="muted">Monthly Cost</div>
+        <div id="roiCost" class="mono" style="font-size:20px">$—</div>
+        <div id="roiUnit" class="muted" style="font-size:12px">—</div>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:10px">
+      <table id="roiQuick"></table>
     </div>
   </div>
 </div>
@@ -115,6 +134,7 @@
 
   const DURATIONS = ["1 hour","1 day","1 week","1 month"];
   const FALLBACK_COUNTS = [8,16,32,64,128,256];
+  const HOURS_PER_MONTH = 730;
 
   let LATEST=[], HISTORY=[], FORECAST=[], METRICS=[], ALERTS=[], ROI=[], chart;
 
@@ -232,7 +252,7 @@
       if (fc.length){
         const yhat = fc.map(r=> Number(r.yhat));
         chart.data.datasets.push({ label:"Forecast", data:yhat, borderColor:"#6aa9ff", borderDash:[5,4], tension:.2, pointRadius:0 });
-        // CI band (use yhat as base so Chart.js can fill)
+        // simple CI band using yhat as filled area
         chart.data.datasets.push({ label:"Forecast CI", data:yhat, backgroundColor:"rgba(106,169,255,0.15)", borderColor:"transparent", fill:true, pointRadius:0, tension:.2 });
         chart.update();
       }
@@ -260,6 +280,121 @@
     renderHistory(gpuSel, durSel, cntSel);
   }
 
+  // ---------- Alerts (grouped, compact) ----------
+  function renderAlerts() {
+    const badge = document.getElementById('alertsBadge');
+    const box   = document.getElementById('alertsGroups');
+
+    if (!ALERTS.length){
+      badge.textContent = '0 alerts';
+      box.textContent = '✅ No active alerts';
+      return;
+    }
+
+    const rows = ALERTS.map(r => ({
+      gpu_type: String(r.gpu_type),
+      duration: String(r.duration),
+      gpu_count: Number(r.gpu_count),
+      price: Number(r.usd_per_gpu_hr),
+      bench: Number(r.benchmark_price),
+      delta: Number(r.delta_pct) // negative = cheaper than benchmark
+    })).sort((a,b)=> a.delta - b.delta);
+
+    const groups = {};
+    for (const r of rows){
+      groups[r.gpu_type] ||= {};
+      groups[r.gpu_type][r.duration] ||= [];
+      groups[r.gpu_type][r.duration].push(r);
+    }
+
+    badge.textContent = `${rows.length} alert${rows.length!==1?'s':''}`;
+
+    const top3 = rows.slice(0,3);
+    const fmtLine = r =>
+      `${r.gpu_type} · ${r.duration} · ${r.gpu_count} ⟶ $${r.price.toFixed(2)} (vs ${r.bench.toFixed(2)}, ${(r.delta*100).toFixed(1)}%)`;
+
+    let html = top3.map(r => `⚠️ ${fmtLine(r)}`).join('<br>');
+    if (rows.length > 3){
+      html += `<div style="margin-top:8px"><a href="#" id="alertsToggle">Show all (${rows.length-3} more)</a></div>`;
+    }
+    box.innerHTML = html;
+
+    const toggle = document.getElementById('alertsToggle');
+    if (toggle){
+      toggle.onclick = (e) => {
+        e.preventDefault();
+        let full = '';
+        for (const gpu of Object.keys(groups)){
+          full += `<div style="margin-top:8px"><strong>${gpu}</strong></div>`;
+          for (const dur of Object.keys(groups[gpu])){
+            const list = groups[gpu][dur]
+              .sort((a,b)=>a.delta-b.delta)
+              .map(r => `• ${r.gpu_count} ⟶ $${r.price.toFixed(2)} (vs ${r.bench.toFixed(2)}, ${(r.delta*100).toFixed(1)}%)`)
+              .join('<br>');
+            full += `<div class="muted" style="margin-left:10px"><em>${dur}</em><br>${list}</div>`;
+          }
+        }
+        box.innerHTML = full;
+      };
+    }
+  }
+
+  // ---------- ROI / Budget (interactive) ----------
+  function initRoiControls(){
+    const gpuSel  = document.getElementById('roiGpu');
+    const durSel  = document.getElementById('roiDur');
+    const cntSel  = document.getElementById('roiCount');
+
+    const gpus = Array.from(new Set(LATEST.map(r=>String(r.gpu_type)))).sort();
+    const durs = ["1 hour","1 day","1 week","1 month"];
+    const counts = Array.from(new Set(LATEST.map(r=>Number(r.gpu_count)))).sort((a,b)=>a-b);
+
+    gpuSel.innerHTML = gpus.map(x=>`<option>${x}</option>`).join('');
+    durSel.innerHTML = durs.map(x=>`<option>${x}</option>`).join('');
+    cntSel.innerHTML = counts.map(x=>`<option>${x}</option>`).join('');
+
+    updateRoi();
+    [gpuSel,durSel,cntSel, document.getElementById('roiUtil')].forEach(el => el.oninput = updateRoi);
+  }
+
+  function findLatestPrice(gpu, dur, count){
+    const r = LATEST.find(x => String(x.gpu_type)===gpu && String(x.duration)===dur && Number(x.gpu_count)===Number(count));
+    return r ? Number(r.usd_per_gpu_hr) : NaN;
+  }
+
+  function updateRoi(){
+    const gpu = document.getElementById('roiGpu').value;
+    const dur = document.getElementById('roiDur').value;
+    const cnt = Number(document.getElementById('roiCount').value);
+    const utilPct = Number(document.getElementById('roiUtil').value);
+    document.getElementById('roiUtilVal').textContent = `${utilPct}%`;
+
+    const price = findLatestPrice(gpu, dur, cnt);
+    const util = utilPct/100;
+    const cost = isFinite(price) ? price * HOURS_PER_MONTH * cnt * util : NaN;
+
+    document.getElementById('roiCost').textContent = isFinite(cost) ? `$${cost.toFixed(0)}` : '$—';
+    document.getElementById('roiUnit').textContent = isFinite(price)
+      ? `${gpu} • ${dur} • ${cnt} GPUs at $${price.toFixed(2)}/hr`
+      : '—';
+
+    // quick presets table (for selected GPU+duration)
+    const counts = [8,16,32,64,128,256].filter(n => isFinite(findLatestPrice(gpu, dur, n)));
+    const presets = [50,75,100];
+
+    let html = '<thead><tr><th>Count</th>' + presets.map(p=>`<th>${p}%</th>`).join('') + '</tr></thead><tbody>';
+    for (const n of counts){
+      const p = findLatestPrice(gpu, dur, n);
+      html += `<tr><td>${n}</td>` + presets.map(pp => {
+        const c = p*HOURS_PER_MONTH*n*(pp/100);
+        return `<td class="mono">$${c.toFixed(0)}</td>`;
+      }).join('') + '</tr>';
+    }
+    html += '</tbody>';
+    document.getElementById('roiQuick').innerHTML = html;
+  }
+
+  // ---------- load extras (forecast/metrics/alerts/roi) ----------
   async function loadExtras(){
     try{
       [FORECAST, METRICS, ALERTS, ROI] = await Promise.all([
@@ -269,35 +404,15 @@
         csv(ROI_PATH).catch(()=>[])
       ]);
 
-      // Alerts
-      const box = document.getElementById('alertsBox');
-      if (!ALERTS.length){
-        box.textContent = "No active alerts";
-      } else {
-        box.innerHTML = ALERTS.map(r =>
-          ` ${r.gpu_type} · ${r.duration} · ${r.gpu_count} → $${Number(r.usd_per_gpu_hr).toFixed(2)} (vs ${Number(r.benchmark_price).toFixed(2)})`
-        ).join('<br>');
-      }
+      // If ROI CSV exists, we still prefer interactive calc from LATEST;
+      // ROI CSV is only used if you want to render a static table elsewhere.
 
-      // ROI table
-      if (ROI.length){
-        const tbl = document.getElementById('roiTable');
-        let html = '<thead><tr><th>GPU</th><th>Duration</th><th>Count</th><th>Utilisation</th><th>Monthly Cost</th></tr></thead><tbody>';
-        for(const r of ROI){
-          html += `<tr>
-            <td>${r.gpu_type}</td>
-            <td>${r.duration}</td>
-            <td>${r.gpu_count}</td>
-            <td>${(Number(r.utilisation)*100).toFixed(0)}%</td>
-            <td class="mono">$${Number(r.monthly_cost_usd).toFixed(0)}</td>
-          </tr>`;
-        }
-        html += '</tbody>';
-        tbl.innerHTML = html;
-      }
+      // Render Alerts after load
+      renderAlerts();
     }catch(e){ console.warn("extras failed",e); }
   }
 
+  // ---------- main boot ----------
   async function main(){
     try{
       document.getElementById('lastRefresh').textContent = 'loading…';
@@ -327,25 +442,29 @@
       const gpus = uniq(LATEST.map(r=>r.gpu_type)).sort();
       const counts = uniq(LATEST.map(r=>r.gpu_count)).sort((a,b)=>a-b);
       document.getElementById('gpu').innerHTML = gpus.map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('duration').innerHTML = DURATIONS.map(v=>`<option>${v}</option>`).join('');
+      document.getElementById('duration').innerHTML = ["1 hour","1 day","1 week","1 month"].map(v=>`<option>${v}</option>`).join('');
       document.getElementById('count').innerHTML = counts.map(v=>`<option>${v}</option>`).join('');
 
       document.getElementById('lastRefresh').textContent = 'loaded ' + new Date().toISOString().slice(0,19) + 'Z';
 
       updateAll();
-      ['gpu','duration','count'].forEach(id => document.getElementById(id).addEventListener('change', updateAll));
-      document.getElementById('showForecast').addEventListener('change', updateAll);
+      ['gpu','duration','count','showForecast'].forEach(id => document.getElementById(id).addEventListener('change', updateAll));
 
-      // load forecasts/metrics/alerts/roi in background
-      loadExtras();
+      // Init ROI controls now that LATEST is in memory
+      initRoiControls();
     }catch(e){
       console.error(e);
       document.getElementById('lastRefresh').textContent = 'failed to load';
     }
   }
 
-  main();
+  // Boot sequence
+  (async () => {
+    await main();
+    await loadExtras();
+  })();
 </script>
 </body>
 </html>
+
 
