@@ -74,189 +74,126 @@
     </div>
   </div>
 
-  <!-- HISTORY (filterable) -->
+    <!-- HISTORY (filterable) -->
   <div class="card">
     <div class="row" style="margin-bottom:8px">
       <div>
         <label for="day">Day (history)</label>
         <select id="day"></select>
       </div>
+      <div style="margin-left:auto">
+        <label><input type="checkbox" id="showForecast"> Show forecast</label>
+      </div>
     </div>
     <div class="chart-wrap">
       <canvas id="histChart"></canvas>
     </div>
+    <div id="modelBadge" class="muted" style="margin-top:6px;font-size:12px">—</div>
   </div>
-</div>
+
+  <!-- ALERTS -->
+  <div class="card">
+    <h3 style="margin-top:0;font-size:16px">Price Alerts</h3>
+    <div id="alertsBox" class="muted">Loading…</div>
+  </div>
+
+  <!-- ROI CALCULATOR -->
+  <div class="card">
+    <h3 style="margin-top:0;font-size:16px">ROI / Budget Calculator</h3>
+    <div class="table-wrap">
+      <table id="roiTable"></table>
+    </div>
+  </div>
+</div> <!-- end wrap -->
 
 <script>
-  // File locations in your repo (pages serves /docs as site root)
-  const LATEST_PATH  = 'data/sfcompute_latest.csv?ts=' + Date.now();
-  const HISTORY_PATH = 'data/sfcompute_history.csv?ts=' + Date.now();
+  // === new paths ===
+  const FORECAST_PATH = 'data/sfcompute_forecast.csv?ts=' + Date.now();
+  const METRICS_PATH  = 'data/sfcompute_metrics.csv?ts=' + Date.now();
+  const ALERTS_PATH   = 'data/alerts.csv?ts=' + Date.now();
+  const ROI_PATH      = 'data/roi_catalog.csv?ts=' + Date.now();
 
-  const DURATIONS = ["1 hour","1 day","1 week","1 month"];
-  const FALLBACK_COUNTS = [8,16,32,64,128,256];
+  let FORECAST = [], METRICS = [], ALERTS = [], ROI = [];
 
-  let LATEST = [], HISTORY = [], chart;
-
-  // --- utils ---
-  function csv(url){
-    return new Promise((res, rej) => {
-      Papa.parse(url, {download:true, header:true, dynamicTyping:true, skipEmptyLines:true,
-        complete: r => res(r.data), error: rej});
-    });
-  }
-  const uniq = a => Array.from(new Set(a));
-  const fmt  = x => (x==null || Number.isNaN(x)) ? '—' : `$${Number(x).toFixed(2)}`;
-  const dayOf = ts => (ts||'').slice(0,10);
-
-  function coerceRow(r){
-    r.gpu_type = String(r.gpu_type || r.gpu || '').trim();
-    r.duration = String(r.duration || '').trim();
-    r.gpu_count = Number(r.gpu_count);
-    if (typeof r.usd_per_gpu_hr === 'string'){
-      const m = r.usd_per_gpu_hr.match(/(\d+(\.\d+)?)/);
-      r.usd_per_gpu_hr = m ? Number(m[1]) : null;
-    }
-    if (r.usd_per_gpu_hr === '' || r.usd_per_gpu_hr === 'None') r.usd_per_gpu_hr = null;
-    r.ts_utc = String(r.ts_utc || r.timestamp || '');
-    return r;
-  }
-
-  function buildPivot(rows){
-    const m = new Map();
-    let newest = '';
-    for(const r of rows){
-      const k = `${r.duration}|${r.gpu_count}`;
-      m.set(k, r.usd_per_gpu_hr);
-      if (String(r.ts_utc) > newest) newest = String(r.ts_utc);
-    }
-    return {pivot:m, newest};
-  }
-
-  function renderLatest(gpuSel, durationSel, countSel){
-    const rows = LATEST.filter(r => r.gpu_type === gpuSel);
-    const counts = rows.length ? uniq(rows.map(r => r.gpu_count)).sort((a,b)=>a-b) : FALLBACK_COUNTS.slice();
-    const {pivot, newest} = buildPivot(rows);
-
-    document.getElementById('count').innerHTML = counts.map(v=>`<option>${v}</option>`).join('');
-    if (!counts.includes(Number(countSel))){
-      countSel = counts[0];
-      document.getElementById('count').value = countSel;
-    }
-
-    const tbl = document.getElementById('latestTable');
-    let html = '<thead><tr><th>Duration</th>' + counts.map(c=>`<th class="mono">${c}</th>`).join('') + '</tr></thead><tbody>';
-    for (const d of DURATIONS){
-      html += `<tr><td>${d}</td>`;
-      for (const c of counts){
-        html += `<td class="mono">${fmt(pivot.get(`${d}|${c}`))}</td>`;
-      }
-      html += '</tr>';
-    }
-    html += '</tbody>';
-    tbl.innerHTML = html;
-
-    const selVal = pivot.get(`${durationSel}|${Number(countSel)}`);
-    const rowVals = counts.map(c => pivot.get(`${durationSel}|${c}`)).filter(v => v != null);
-    const kMin = rowVals.length ? Math.min(...rowVals) : null;
-    const kMax = rowVals.length ? Math.max(...rowVals) : null;
-    document.getElementById('kpiDate').textContent  = newest || '—';
-    document.getElementById('kpiPrice').textContent = fmt(selVal);
-    document.getElementById('kpiMin').textContent   = fmt(kMin);
-    document.getElementById('kpiMax').textContent   = fmt(kMax);
-  }
-
-  function renderHistory(gpuSel, durationSel, countSel){
-    const rows = HISTORY.filter(r =>
-      r.gpu_type === gpuSel && r.duration === durationSel && r.gpu_count === Number(countSel) && r.usd_per_gpu_hr != null
-    ).sort((a,b)=> String(a.ts_utc).localeCompare(String(b.ts_utc)));
-
-    const days = ['All days', ...uniq(rows.map(r => dayOf(r.ts_utc)))];
-    const daySel = document.getElementById('day');
-    if (!daySel.options.length){
-      daySel.innerHTML = days.map(d=>`<option>${d}</option>`).join('');
-    } else {
-      const cur = daySel.value;
-      daySel.innerHTML = days.map(d=>`<option ${d===cur?'selected':''}>${d}</option>`).join('');
-    }
-
-    let filtered = rows;
-    if (daySel.value && daySel.value !== 'All days'){
-      filtered = rows.filter(r => dayOf(r.ts_utc) === daySel.value);
-    }
-
-    const labels = filtered.map(r => r.ts_utc);
-    const y = filtered.map(r => r.usd_per_gpu_hr);
-
-    const ctx = document.getElementById('histChart').getContext('2d');
-    if (chart) chart.destroy();
-    chart = new Chart(ctx, {
-      type: 'line',
-      data: { labels, datasets: [{ label: `${gpuSel} · ${durationSel} · ${countSel} GPUs`, data: y, tension: .2 }] },
-      options: {
-        responsive:true,
-        maintainAspectRatio:false,   // follow .chart-wrap height
-        scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:false } }
-      }
-    });
-
-    daySel.onchange = () => renderHistory(gpuSel, durationSel, countSel);
-  }
-
-  function updateAll(){
-    const gpuSel = document.getElementById('gpu').value;
-    const durSel = document.getElementById('duration').value;
-    const cntSel = document.getElementById('count').value;
-    renderLatest(gpuSel, durSel, cntSel);
-    renderHistory(gpuSel, durSel, cntSel);
-  }
-
-  async function main(){
+  async function loadExtras(){
     try{
-      document.getElementById('lastRefresh').textContent = 'loading…';
-      const [latestRows, histRows] = await Promise.all([csv(LATEST_PATH), csv(HISTORY_PATH)]);
-      LATEST  = latestRows.map(coerceRow);
-      HISTORY = histRows.map(coerceRow);
+      [FORECAST, METRICS, ALERTS, ROI] = await Promise.all([
+        csv(FORECAST_PATH), csv(METRICS_PATH), csv(ALERTS_PATH), csv(ROI_PATH)
+      ]);
 
-      if (!LATEST.length && HISTORY.length){
-        const byKey = new Map();
-        for (const r of HISTORY){
-          const k = `${r.gpu_type}|${r.duration}|${r.gpu_count}`;
-          const prev = byKey.get(k);
-          if (!prev || String(r.ts_utc) > String(prev.ts_utc)) byKey.set(k, r);
+      // Alerts
+      const box = document.getElementById('alertsBox');
+      if (!ALERTS.length){
+        box.textContent = "✅ No active alerts";
+      } else {
+        box.innerHTML = ALERTS.map(r =>
+          `⚠️ ${r.gpu_type} · ${r.duration} · ${r.gpu_count} → $${Number(r.usd_per_gpu_hr).toFixed(2)} (vs ${Number(r.benchmark_price).toFixed(2)})`
+        ).join('<br>');
+      }
+
+      // ROI table
+      if (ROI.length){
+        const tbl = document.getElementById('roiTable');
+        let html = '<thead><tr><th>GPU</th><th>Duration</th><th>Count</th><th>Utilisation</th><th>Monthly Cost</th></tr></thead><tbody>';
+        for(const r of ROI){
+          html += `<tr>
+            <td>${r.gpu_type}</td>
+            <td>${r.duration}</td>
+            <td>${r.gpu_count}</td>
+            <td>${(r.utilisation*100).toFixed(0)}%</td>
+            <td class="mono">$${Number(r.monthly_cost_usd).toFixed(0)}</td>
+          </tr>`;
         }
-        LATEST = [...byKey.values()];
+        html += '</tbody>';
+        tbl.innerHTML = html;
       }
-
-      if (!LATEST.length){
-        document.getElementById('lastRefresh').textContent = 'no data';
-        return;
-      }
-
-      const gpus = uniq(LATEST.map(r=>r.gpu_type)).sort();
-      const counts = uniq(LATEST.map(r=>r.gpu_count)).sort((a,b)=>a-b);
-      document.getElementById('gpu').innerHTML = gpus.map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('duration').innerHTML = DURATIONS.map(v=>`<option>${v}</option>`).join('');
-      document.getElementById('count').innerHTML = counts.map(v=>`<option>${v}</option>`).join('');
-
-      document.getElementById('lastRefresh').textContent = 'loaded ' + new Date().toISOString().slice(0,19) + 'Z';
-
-      updateAll();
-      ['gpu','duration','count'].forEach(id => document.getElementById(id).addEventListener('change', updateAll));
-    }catch(e){
-      console.error(e);
-      document.getElementById('lastRefresh').textContent = 'failed to load';
-    }
+    }catch(e){ console.warn("extras failed",e); }
   }
 
-  main();
+  // --- modify renderHistory to add forecast overlay + badge ---
+  const oldRenderHistory = renderHistory;
+  renderHistory = function(gpuSel,durationSel,countSel){
+    oldRenderHistory(gpuSel,durationSel,countSel);
+
+    if(!document.getElementById('showForecast').checked || !FORECAST.length) return;
+
+    const rows = FORECAST.filter(r =>
+      r.gpu_type===gpuSel && r.duration===durationSel && Number(r.gpu_count)===Number(countSel)
+    ).sort((a,b)=> String(a.ds||a.ts_utc).localeCompare(String(b.ds||b.ts_utc)));
+
+    if(!rows.length) return;
+    const labels = rows.map(r=> r.ds || r.ts_utc);
+    const yhat   = rows.map(r=> Number(r.yhat));
+    const lower  = rows.map(r=> Number(r.yhat_lower));
+    const upper  = rows.map(r=> Number(r.yhat_upper));
+
+    // add forecast line + band to existing chart
+    chart.data.datasets.push({
+      label: "Forecast",
+      data: yhat, borderColor:"#6aa9ff", borderDash:[5,4], fill:false, tension:.2
+    });
+    chart.data.datasets.push({
+      label: "Forecast CI",
+      data: yhat, borderColor:"transparent",
+      backgroundColor:"rgba(106,169,255,0.15)", fill:true,
+      tension:.2, pointRadius:0
+    });
+    chart.update();
+
+    // badge (use metrics if available)
+    const m = METRICS.find(r=> r.gpu_type===gpuSel && r.duration===durationSel && Number(r.gpu_count)===Number(countSel));
+    if(m){
+      const skill = (Number(m.skill)*100).toFixed(1);
+      const smape = Number(m.smape).toFixed(1);
+      document.getElementById('modelBadge').textContent =
+        `Model skill vs naive: ${skill}% · SMAPE: ${smape}%`;
+    }
+  };
+
+  document.getElementById('showForecast').onchange = updateAll;
+
+  // --- run extras loader after main() finishes ---
+  main().then(loadExtras);
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
