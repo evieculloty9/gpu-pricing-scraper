@@ -27,13 +27,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install requirements
         run: |
-          python -m pip install --upgrade pip
-          pip install pandas jupyter nbconvert
-          # pip install playwright
-          # python -m playwright install --with-deps chromium
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r requirements.txt
+
+      # (Optional) Pre-install CmdStan toolchain once to reduce Prophet’s first-fit cost
+      # You can keep/omit this; it adds a few minutes on a cold runner.
+      - name: Prepare cmdstan (optional)
+        run: |
+          python - <<'PY'
+          try:
+              from cmdstanpy import install_cmdstan
+              install_cmdstan()
+              print("CmdStan installed.")
+          except Exception as e:
+              print("CmdStan installation skipped/failed:", e)
+          PY
 
       - name: Run scraper notebook (no in-place edits)
         run: |
@@ -85,6 +97,7 @@ jobs:
 
           # Push rebased head
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+
 
 
 
