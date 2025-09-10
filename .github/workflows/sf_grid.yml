@@ -2,7 +2,7 @@ name: SF Grid — scrape + publish
 
 on:
   schedule:
-    - cron: "0 */2 * * *"     # every 2 hours
+    - cron: "0 */2 * * *"   # every 2 hours
   workflow_dispatch: {}
 
 permissions:
@@ -19,23 +19,24 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install requirements
         run: |
           python -m pip install --upgrade pip wheel setuptools
           pip install -r requirements.txt
 
-      # (Optional) Pre-install CmdStan toolchain once to reduce Prophet’s first-fit cost
-      # You can keep/omit this; it adds a few minutes on a cold runner.
+      # Optional: pre-install CmdStan to speed up Prophet on cold runners.
       - name: Prepare cmdstan (optional)
         run: |
           python - <<'PY'
@@ -68,6 +69,61 @@ jobs:
           print(f"Aggregated {len(files)} files into docs/data/sfcompute_history.csv")
           PY
 
+      # --- Build decision tools data (ROI + Alerts) ---
+      - name: Build decision tools data
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pandas as pd, numpy as np
+          from pathlib import Path
+
+          d = Path("docs/data"); d.mkdir(parents=True, exist_ok=True)
+          hist = pd.read_csv(d/"sfcompute_history.csv")
+          latest = pd.read_csv(d/"sfcompute_latest.csv")
+
+          # ---------- ROI / Budget: roi_catalog.csv ----------
+          HOURS_PER_MONTH = 730
+          latest["gpu_count"] = pd.to_numeric(latest["gpu_count"], errors="coerce")
+          latest["usd_per_gpu_hr"] = pd.to_numeric(latest["usd_per_gpu_hr"], errors="coerce")
+          latest = latest.dropna(subset=["gpu_type","duration","gpu_count","usd_per_gpu_hr"])
+
+          rows=[]
+          for _, r in latest.iterrows():
+              for u in (0.5, 0.75, 1.0):
+                  rows.append({
+                    "gpu_type": r["gpu_type"],
+                    "duration": r["duration"],
+                    "gpu_count": int(r["gpu_count"]),
+                    "utilisation": u,
+                    "monthly_cost_usd": float(r["usd_per_gpu_hr"]) * HOURS_PER_MONTH * int(r["gpu_count"]) * u
+                  })
+          roi = pd.DataFrame(rows)
+          roi.to_csv(d/"roi_catalog.csv", index=False)
+
+          # ---------- Alerts: alerts.csv ----------
+          hist["ts_utc"] = pd.to_datetime(hist["ts_utc"], utc=True, errors="coerce")
+          hist = hist.dropna(subset=["gpu_type","duration","gpu_count","usd_per_gpu_hr","ts_utc"]).sort_values("ts_utc")
+          hist["usd_per_gpu_hr"] = pd.to_numeric(hist["usd_per_gpu_hr"], errors="coerce")
+
+          def bench_last7d(g):
+              s = g["usd_per_gpu_hr"].tail(168)  # ≈7 days of hourly pts
+              return pd.Series({"benchmark_price": s.median()})
+
+          bench = (hist.groupby(["gpu_type","duration","gpu_count"])
+                        .apply(bench_last7d)
+                        .reset_index())
+
+          latest_m = latest.merge(bench, on=["gpu_type","duration","gpu_count"], how="left")
+          THRESH = 0.05
+          latest_m["delta_pct"] = (latest_m["usd_per_gpu_hr"] - latest_m["benchmark_price"]) / latest_m["benchmark_price"]
+          alerts = latest_m[latest_m["delta_pct"] <= -THRESH][
+              ["gpu_type","duration","gpu_count","usd_per_gpu_hr","benchmark_price","delta_pct"]
+          ].copy()
+          alerts.to_csv(d/"alerts.csv", index=False)
+
+          print("Wrote:", (d/"roi_catalog.csv"), (d/"alerts.csv"))
+          PY
+
       # --- Commit + rebase + push (single atomic step) ---
       - name: Commit and push updated data
         env:
@@ -81,7 +137,7 @@ jobs:
           git checkout "$BRANCH"
 
           # Stage everything produced by this run
-          git add sfcompute_grid/*.csv docs/data/sfcompute_*.csv || true
+          git add sfcompute_grid/*.csv docs/data/*.csv || true
 
           # Nothing new? Exit cleanly.
           if git diff --cached --quiet; then
@@ -97,6 +153,7 @@ jobs:
 
           # Push rebased head
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+
 
 
 
