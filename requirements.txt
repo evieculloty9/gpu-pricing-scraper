@@ -1,6 +1,12 @@
-pandas
-numpy
-statsmodels
-plotly
+# Core
+pandas>=2.2
+numpy>=1.26
+
+# Notebook execution
+jupyter
+nbconvert
+
+# Forecasting (Prophet first; SARIMAX as fallback in your code)
 prophet==1.1.5
 cmdstanpy==1.2.4
+statsmodels>=0.14
